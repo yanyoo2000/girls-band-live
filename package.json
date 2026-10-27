@@ -1,0 +1,14 @@
+{
+  "name": "girls-band-live",
+  "version": "0.1.0",
+  "private": true,
+  "description": "少女乐队主题的吸血鬼幸存者玩法，由 AI 游戏工作室从企划做到发布。",
+  "scripts": {
+    "test": "node --test tests",
+    "build": "node tools/build.mjs",
+    "validate": "node tools/validate.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
