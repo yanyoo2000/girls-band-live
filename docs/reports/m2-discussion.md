@@ -308,3 +308,14 @@
 - **口径抽查**：`hybrid-a.md:102`（8 种组合）、`hybrid-a.md:4`（零成长）、`hybrid-b.md:90`（断 1–3 根）、`hybrid-b.md:125-126`（8:30 两行）、`hybrid-c.md:111`（8 卡各 1 级）、`hybrid-c.md:126-127`（第一次人浪）——见 §4.6。
 - **作者核对**：`docs/discussion` 与 10 份 pitch 的当前 assignee 均为 `planner-*-v2`；评审/打分员未参与提案，无自评冲突。唯一例外是 `lineage.md` §5 的作者声明与任务记录不一致（见 §4.8）。
 - 本报告只创建 `docs/reports/m2-discussion.md`，未修改任何企划、互评或概念文件；未运行 git；未安装依赖。
+
+---
+
+## 2026-10-28 规则对齐（追加）
+
+用户新指令：**技术与工作量不是问题，一切只追求最好的游戏。**
+
+- M3 起以 `docs/brief.md` §5 的新规则为准：Fun 30 / Theme 20 / Originality 20 / Depth 10 / Polish 10 / Feasibility 5 / Scope 5。
+- 取消可行性否决；Feasibility 只判断“有没有可信的桌面浏览器实现路径”，Scope 只判断“能不能完整收口”，均不得作为降分或否决理由。
+- 平局依次比较 Fun → Originality → Theme。
+- 本报告中 §3.4 的旧排序建议与「给 M3 的一条建议」中“能不能做完且不丢人”的旧口径**作废**，不得作为 M3 计票依据。
