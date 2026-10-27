@@ -73,7 +73,7 @@ index.html（根）          构建生成：根目录发布入口（与 Vite 入
 | TypeScript | 5.9.x，`strict: true` |
 | Vite | 8.3.x + `@vitejs/plugin-react` 6.1.x |
 | Vitest | 5.0.x |
-| 目标 | WebGL2；Chrome/Edge/Firefox 最新两个大版本；移动触屏可玩 |
+| 目标 | WebGL2；仅桌面 Chrome/Edge/Firefox 最新两个大版本；不做移动端/触屏 |
 
 > **依赖政策**：上表是核心栈，不是封闭清单。允许按项目需要引入其他库/框架；新增依赖由技术总监评估（必要性、包体、许可证、维护状态、离线可用性、供应链风险），记录在 `docs/tech-spec.md` 与 `docs/decisions/`，由制作人统一安装并提交 `package-lock.json`。禁止需要联网运行时、CDN 运行时依赖与包含版权素材的包。
 

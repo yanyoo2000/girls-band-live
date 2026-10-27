@@ -31,7 +31,7 @@
 | `planner-minimal` | 极简与资源：单机制深度、低成本高辨识度 |
 | `planner-liveops` | 长线运营：巡演/曲目/粉丝值，但 MVP 必须收敛 |
 | `planner-experimental` | 反套路实验：颠覆幸存者公式的机制 |
-| `planner-newbie` | 新手友好：可读性、学习曲线、移动端 |
+| `planner-newbie` | 新手友好：可读性、学习曲线、桌面操作 |
 
 ### 1.3 评审与打分（10）
 
@@ -57,7 +57,7 @@
 | `dev-combat` | 伤害、投射物、敌人、波次、Boss、武器运行时 |
 | `dev-progression` | 经验/等级、升级卡池、武器进化、被动、存档 |
 | `dev-content` | 角色/武器/敌人/波次/台词/配色数据与平衡表 |
-| `dev-ui` | React 屏幕路由、HUD、菜单、升级、暂停、设置、结算、响应式、触屏 |
+| `dev-ui` | React 屏幕路由、HUD、菜单、升级、暂停、设置、结算、响应式、键鼠 |
 | `dev-audio` | WebAudio 四层音乐、音效、静音/音量、失焦处理 |
 
 ### 1.5 质量与发行（5）
@@ -66,7 +66,7 @@
 | --- | --- |
 | `qa-automation` | Vitest 单元测试、验收矩阵、构建校验 |
 | `qa-playtester` | Chrome 实机试玩、缺陷与手感反馈 |
-| `qa-compat` | 兼容性、移动端、无障碍、离线验证 |
+| `qa-compat` | 桌面兼容性、无障碍、离线验证 |
 | `code-reviewer` | 独立代码审查（质量门） |
 | `release-manager` | README/CHANGELOG、发布清单、成品打包 |
 
@@ -98,7 +98,7 @@ M7 发行包装 → 最终验收 → v1.0.0
 
 | 里程碑 | 任务 | 交付物 | commit / tag |
 | --- | --- | --- | --- |
-| **M1 企划提案** | 10 份独立 pitch；制作人完整性报告 | `docs/pitches/*.md`、`docs/reports/m1-pitches.md` | `feat(creative): M1 ten pitches` / `m1-pitches` |
+| **M1 企划提案** | 10 份自由企划（无模板/字数/P0 数量限制）；制作人完整性报告 | `docs/pitches/*.md`、`docs/reports/m1-pitches.md` | `feat(creative): M1 ten free pitches` / `m1-pitches` |
 | **M2 交叉讨论** | 10 份互评；3 个融合方案 | `docs/discussion/*.md`、`docs/concepts/*.md`、`docs/reports/m2-discussion.md` | `docs(creative): M2 cross-review and hybrids` / `m2-discussion` |
 | **M3 评审打分** | 3 份评审；7 份打分；计票定案 | `docs/reviews/*`、`docs/scores/*`、`docs/decision/selected-concept.md`、`docs/reports/m3-selection.md` | `docs(review): M3 reviews, scores and selection` / `m3-decision` |
 | **M4 设计定稿** | GDD、技术方案/类型契约、依赖清单、验收矩阵、美术方向 | `docs/gdd.md`、`docs/tech-spec.md`（含依赖清单）、`docs/acceptance.md`、`docs/art-direction.md`、`src/types/*`、`docs/reports/m4-design.md` | `docs(design): M4 GDD, types and tech spec` / `m4-design` |
