@@ -1,0 +1,193 @@
+/**
+ * 《谁在听》主题 token（M5，art-director 所有）。
+ *
+ * 八组 token：色彩 / 字体 / 间距 / 圆角与描边 / 发光 / 动效 / 层叠 / 状态。
+ * 只放变量与状态覆盖，不放组件样式（组件样式归 src/styles/base.css、ui.css）。
+ *
+ * 与 `src/data/palette.ts` 的关系：17 个色彩 token 与 PaletteDef 一一对应，
+ * 数值与 `src/data/palette.ts` 的 PALETTE_HEX 逐项一致（该文件是唯一运行时色源）；
+ * Three 侧通过 `PaletteDef` 读取同一组色值，本文件只把它们映射成 CSS 变量，禁止另写一套。
+ * 三色规则：灰 / 彩 / 黑；白是血量与舞台硬光。第四种高饱和色视为 bug。
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ======================================================================
+   * G1 色彩（17 个 PaletteToken + 7 个界面语义 token）
+   * ==================================================================== */
+  --gbl-color-ink: #0b0d12;
+  --gbl-color-stage-warm: #fff1d6;
+  --gbl-color-stage-full: #d8ecff;
+  --gbl-color-stage-black: #07080a;
+  --gbl-color-audience-grey: #6e7480;
+  --gbl-color-audience-colored: #edeff2;
+  --gbl-color-audience-black: #07080a;
+  --gbl-color-zone-root: #bfd6e8;
+  --gbl-color-zone-third: #ff3d7f;
+  --gbl-color-zone-fifth: #35e0d0;
+  --gbl-color-zone-seventh: #ffb03a;
+  --gbl-color-member-jiangqi: #edeff2;
+  --gbl-color-member-xuliao: #d8384f;
+  --gbl-color-member-wensheng: #22314f;
+  --gbl-color-member-shaoyan: #c98a3a;
+  --gbl-color-whiteout: #ffffff;
+  --gbl-color-danger: #ff5a3c;
+
+  --gbl-color-surface: var(--gbl-color-ink);
+  --gbl-color-panel: #161a22;
+  --gbl-color-panel-raised: #1d222c;
+  --gbl-color-border: #2e3540;
+  --gbl-color-text: #edeff2;
+  --gbl-color-text-dim: #9aa3b2;
+  --gbl-color-focus: #ffffff;
+
+  /* 三态（观众）：颜色只做第一编码，姿态与手机灯是第二、第三编码。 */
+  --gbl-audience-grey: var(--gbl-color-audience-grey);
+  --gbl-audience-colored: var(--gbl-color-audience-colored);
+  --gbl-audience-black: var(--gbl-color-audience-black);
+
+  /* 高饱和面积预算：副歌 12–18%；白 ≤8%。仅供 CSS 遮罩与调试读数引用。 */
+  --gbl-ink-area: 0.6;
+  --gbl-color-area: 0.15;
+  --gbl-white-area: 0.07;
+
+  /* ======================================================================
+   * G2 字体
+   * ==================================================================== */
+  --gbl-font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --gbl-font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --gbl-font-size-xs: 12px;
+  --gbl-font-size-sm: 14px;
+  --gbl-font-size-base: 16px;
+  --gbl-font-size-lg: 20px;
+  --gbl-font-size-xl: 28px;
+  --gbl-font-size-display: 40px;
+  --gbl-line-tight: 1.2;
+  --gbl-line-normal: 1.4;
+  --gbl-line-loose: 1.5;
+  --gbl-tracking-label: 0.08em;
+  --gbl-tracking-title: -0.01em;
+
+  /* ======================================================================
+   * G3 间距与控件尺寸（4 基数）
+   * ==================================================================== */
+  --gbl-space-1: 4px;
+  --gbl-space-2: 8px;
+  --gbl-space-3: 12px;
+  --gbl-space-4: 16px;
+  --gbl-space-5: 24px;
+  --gbl-space-6: 32px;
+  --gbl-space-7: 48px;
+  --gbl-space-panel: 20px;
+  --gbl-space-safe: 24px;
+  --gbl-control-height: 44px;
+  --gbl-card-width: 236px;
+  --gbl-card-height: 320px;
+
+  /* ======================================================================
+   * G4 圆角与描边
+   * ==================================================================== */
+  --gbl-radius-sm: 4px;
+  --gbl-radius-md: 6px;
+  --gbl-radius-pill: 999px;
+  --gbl-border-hairline: 1px;
+  --gbl-border-strong: 2px;
+  --gbl-focus-offset: 2px;
+
+  /* ======================================================================
+   * G5 发光（无后处理，只用 CSS 与自发光几何）
+   * ==================================================================== */
+  --gbl-glow-soft: 0 0 12px rgb(255 241 214 / 22%);
+  --gbl-glow-strong: 0 0 28px rgb(255 61 127 / 32%);
+  --gbl-glow-white: 0 0 18px rgb(255 255 255 / 38%);
+  --gbl-flash-opacity: 1;
+
+  /* ======================================================================
+   * G6 动效
+   * ==================================================================== */
+  --gbl-duration-fast: 120ms;
+  --gbl-duration-base: 180ms;
+  --gbl-duration-card: 200ms;
+  --gbl-duration-slow: 240ms;
+  --gbl-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --gbl-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ======================================================================
+   * G7 层叠
+   * ==================================================================== */
+  --gbl-z-base: 0;
+  --gbl-z-hud: 10;
+  --gbl-z-overlay: 20;
+  --gbl-z-dialog: 30;
+  --gbl-z-results: 40;
+  --gbl-z-toast: 50;
+  --gbl-z-focus: 60;
+  --gbl-z-debug: 70;
+
+  /* ======================================================================
+   * G8 状态默认值（由 data-* 覆盖；见文件末尾）
+   * ==================================================================== */
+  --gbl-motion-enabled: 1;
+  --gbl-contrast-boost: 0;
+  --gbl-shake-enabled: 1;
+}
+
+/* G8-a 减少动态：设置面板写入 data-reduced-motion="true"。 */
+[data-reduced-motion="true"] {
+  --gbl-motion-enabled: 0;
+  --gbl-duration-fast: 0ms;
+  --gbl-duration-base: 0ms;
+  --gbl-duration-card: 0ms;
+  --gbl-duration-slow: 0ms;
+  --gbl-shake-enabled: 0;
+  --gbl-glow-strong: none;
+}
+
+/* G8-b 高对比：描边加倍、背景再暗、文字提亮。 */
+[data-high-contrast="true"] {
+  --gbl-contrast-boost: 1;
+  --gbl-border-hairline: 2px;
+  --gbl-color-surface: #000000;
+  --gbl-color-panel: #0d1015;
+  --gbl-color-border: #6f7a8a;
+  --gbl-color-text: #ffffff;
+  --gbl-color-text-dim: #d8dee8;
+  --gbl-color-focus: #ffffff;
+  --gbl-glow-white: 0 0 0 transparent;
+}
+
+/* G8-c 低闪：白闪 1 帧、60% 不透明度；发光收窄。 */
+[data-low-flash="true"] {
+  --gbl-flash-opacity: 0.6;
+  --gbl-glow-strong: 0 0 12px rgb(255 61 127 / 22%);
+  --gbl-glow-white: 0 0 8px rgb(255 255 255 / 24%);
+}
+
+/* G8-d 低画质：去掉所有 CSS 发光，交给 Three 侧降级。 */
+[data-quality="low"] {
+  --gbl-glow-soft: none;
+  --gbl-glow-strong: none;
+  --gbl-glow-white: none;
+}
+
+/* 系统级偏好兜底：即使还没读到存档设置，也不做大幅动效。 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --gbl-motion-enabled: 0;
+    --gbl-duration-fast: 0ms;
+    --gbl-duration-base: 0ms;
+    --gbl-duration-card: 0ms;
+    --gbl-duration-slow: 0ms;
+    --gbl-shake-enabled: 0;
+  }
+}
+
+/* 强制颜色模式下不使用发光，只保留边框与文字。 */
+@media (forced-colors: active) {
+  :root {
+    --gbl-glow-soft: none;
+    --gbl-glow-strong: none;
+    --gbl-glow-white: none;
+  }
+}

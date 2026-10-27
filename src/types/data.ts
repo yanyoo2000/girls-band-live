@@ -115,6 +115,8 @@ export interface SeatGridDef {
   /** 中央走道所在的列边界；主走道所在的行边界。 */
   readonly aisleCol: number;
   readonly aisleRow: number;
+  /** 走道额外间隙（米）：列 ≥ aisleCol 或排 ≥ aisleRow 的座位在该轴上加出的距离。 */
+  readonly aisleGap: Meters;
   /** 座位在世界坐标中的原点与间距。 */
   readonly origin: { readonly x: Meters; readonly z: Meters };
   readonly spacing: { readonly x: Meters; readonly z: Meters };

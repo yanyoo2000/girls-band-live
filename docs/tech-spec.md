@@ -1178,6 +1178,18 @@ dispose()
 - 声部固定：根 / 三 / 五 / 七；第 4 区只在七和弦小节是内音（`ChordDef.zoneInChord`）。
 - 渲染实例索引 = `row * 32 + col`；`AudienceFrame.state/heat/phone/zone` 与之同序。
 
+**座位世界坐标唯一真源（t103 锁定）**：只允许 `src/data/seats.ts` 定义，其余层一律调用。
+
+| 项 | 定义 |
+| --- | --- |
+| 常量 | `rows 24`、`cols 32`、`capacity 768`、`aisleCol 16`、`aisleRow 12`、`aisleGap 0.7`、`spacing (0.62, 0.9)`、`rowRise 0.12`、`origin (9.96, 5.2)` |
+| 正向 | `x = origin.x − col*spacing.x − (col ≥ aisleCol ? aisleGap : 0)`；`z = origin.z + row*spacing.z + (row ≥ aisleRow ? aisleGap : 0)`；`y = row*rowRise` |
+| 镜像 | 相机在舞台后方朝 +z 看（screenRight = −x）；列号增大 → x 减小，`front-left`（列 0–15）落在屏幕左侧，与 GDD §6.2 一致 |
+| 跨度 | x 为 19.92（中心 0，两端口 ±9.96）；z 为 21.4（5.2 → 26.6） |
+| API | `seatPositionAt(grid,row,col)`、`seatPositionOf(grid,seat)`、`seatAtPoint(grid,point)`（最近座位，越界 null）、`nearestSeatColumn/Row`、`seatGridCenterX` |
+| 禁止 | `src/game/**`、`src/three/**` 不得再出现 `SEAT_AISLE_GAP`、`*_FALLBACK_*`、`useFallbackOrigin`，也不得自己写 `origin ± row/col × spacing` 的坐标公式；`models.buildSeats` 与 `instancing.computeSeatLayout` 必须调用同一函数 |
+| 回归 | `tests/seat-layout.test.ts`：768 席正反 round-trip、576 席位移 0.7、x 中心 0±1e-6、方向断言、跨走道 zone/光覆盖 |
+
 ### 7.5 种子与 dev 入口
 
 - 种子来源：`?seed=12345`（dev/QA）或 `Date.now() % 2^31`（正式）；写入 `RunConfig.seed`。
