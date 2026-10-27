@@ -15,7 +15,7 @@
 
 1. **像一款真正的幸存者游戏**：怪潮密度、构筑成长、局内节奏、重开欲望。
 2. **像一支真正的少女乐队**：角色有性格与关系，乐器即武器，音乐即战斗反馈。
-3. **真的能玩**：原生 HTML，离线单文件，键盘/触屏均可，无报错，60fps 目标。
+3. **真的能玩**：React + TypeScript + Three.js 构建，离线单文件，键盘/触屏均可，无报错，60fps 目标。
 
 ---
 
@@ -25,7 +25,7 @@
 | --- | --- |
 | 类型 | 自动攻击 + 怪潮生存 + 局内构筑（Vampire Survivors-like） |
 | 主题 | 少女乐队：排练室、Livehouse、巡演、粉丝、成员羁绊 |
-| 平台 | 桌面浏览器优先（Chrome/Edge/Firefox），移动浏览器可玩 |
+| 平台 | 桌面浏览器优先（Chrome/Edge/Firefox，WebGL2）；移动浏览器可玩 |
 | 单局时长 | 目标 10 分钟；Boss 在 9:00 登场，击败 Boss 即胜利；12:00 强制结算 |
 | 操作 | 移动（WASD/方向键/虚拟摇杆）+ 自动攻击 + 1 个主动技「Encore」（Space/按钮）+ 暂停 |
 | 情绪基调 | 明亮、热血、青春、略带中二；不猎奇、不黑暗、不卖惨 |
@@ -72,16 +72,16 @@
 
 ## 4. 技术与交付硬约束
 
-1. **原生 HTML/CSS/JavaScript**，零第三方运行时依赖，零 npm 依赖，零网络请求。
-2. **单文件成品**：`dist/girls-band-live.html` ≤ 2MB（目标 ≤ 1MB），`file://` 双击可玩。
-3. 不允许外部字体、图片、音频、CDN、埋点、远程接口；所有视觉用 Canvas/CSS/SVG，所有声音用 WebAudio 合成。
-4. 经典脚本（非 ES module）按固定顺序加载；每个模块挂 `window.GBL`，纯逻辑模块在 Node 下可 `require` 以便测试。
-5. 逻辑分辨率 1280×720，按窗口等比缩放；移动端 390×844 竖屏可用（可提示横屏，但不能阻止游玩）。
-6. 目标 60fps（150 敌人、中端桌面）；实体硬上限 250；低帧率时允许降级特效，但不允许崩溃。
-7. 浏览器：Chrome/Edge 最新两个大版本、Firefox 最新两个大版本；Safari 16+ 尽力兼容；移动 Chrome/Safari 最新版。
-8. 存档只允许 localStorage，key 为 `gbl.save.v1`，读取失败必须回退默认值且不阻塞启动。
-9. 代码必须通过 `node --check`、`node --test tests`、`node tools/build.mjs`、`node tools/validate.mjs`。
-10. 中文字体使用系统字体栈；界面文案中文；代码标识符英文。
+1. **React + TypeScript + Three.js**：React 19 管理所有 DOM UI（菜单/HUD/升级/暂停/结算/设置），Three.js 0.186 负责 3D 舞台与战斗渲染，Vite 8 负责开发与构建。
+2. **TypeScript strict**：`npm run typecheck`（`tsc --noEmit`）必须 0 错误；禁止无理由的 `any`；共享类型集中在 `src/types/`。
+3. **依赖策略**：默认保持最小依赖；**允许按项目需要引入外部库/框架**，但必须由技术总监评估并记录在 `docs/tech-spec.md` 的依赖清单与 `docs/decisions/` 中。评估维度：必要性、包体、许可证、维护状态、离线可用性、供应链风险。新增依赖必须锁定版本并提交 `package-lock.json`；禁止 CDN 运行时依赖、需要联网服务的库与包含版权素材的包。
+4. **单文件成品**：`npm run build` 产出 `dist/girls-band-live.html` 与根 `index.html`，≤ 4MB（目标 ≤ 2MB），`file://` 双击可玩；Vite 的常规 `dist/` 产物同时保留。
+5. 不允许外部字体、图片、音频、glTF/GLB 模型、CDN、埋点、远程接口；所有视觉用 Three.js 基础几何体 + 程序化材质/CanvasTexture + CSS/SVG，所有声音用 WebAudio 合成。
+6. **3D 规格**：俯视 3/4 透视相机跟随玩家；低多边形风格；舞台边界与观众区；灯光/霓虹参与玩法反馈；阴影默认关闭，低画质模式可降 DPR 与粒子上限。
+7. **性能**：目标 60fps（150 敌人、中端桌面、1280×720）；实体硬上限 250；敌人/子弹使用 InstancedMesh 或对象池；React HUD 以 ≤10Hz 的快照更新，禁止每帧 `setState`。
+8. **浏览器**：Chrome/Edge 最新两个大版本、Firefox 最新两个大版本；要求 WebGL2；Safari 17+ 尽力兼容；移动端 390×844 竖屏可用（可提示横屏，但不能阻止游玩）。
+9. 存档只允许 localStorage，key 为 `gbl.save.v1`，读取失败必须回退默认值且不阻塞启动。
+10. 验收命令：`npm run typecheck`、`npm test`、`npm run build`、`npm run validate` 全部通过；构建产物不得包含外部 URL 或外部 module import。中文字体使用系统字体栈；界面文案中文；代码标识符英文。
 
 ---
 
@@ -114,7 +114,7 @@
 2. 从主菜单到角色选择、完整一局、Boss、结算、重开，全流程可玩；暂停/继续/设置/静音可靠。
 3. 3 角色、6 武器、6 进化、8 敌人、1 Boss、1 舞台全部可达；无占位内容。
 4. P0 验收矩阵 100% 通过；P1 未完成项在发布说明中明确列出。
-5. `node --test tests` 全绿；`node tools/build.mjs` 与 `node tools/validate.mjs` 通过。
+5. `npm run typecheck` 与 `npm test` 全绿；`npm run build` 与 `npm run validate` 通过。
 6. 独立代码审查 verdict = pass；无 blocker/high 级问题。
 7. README、CHANGELOG、发布说明、制作名单完整；GitHub Milestone/commit/tag/release 齐全。
 8. 桌面 1920×1080 与移动 390×844 各完成一次 QA 实机试玩并留存证据。
@@ -126,7 +126,8 @@
 - 不复制或影射任何现实乐队、歌曲、歌词、艺人形象、动漫角色、商标。
 - 不做联机、排行榜服务器、账号体系、内购、广告、数据采集。
 - 不做关卡编辑器、模组系统、多语言、配音、3D、过场动画。
-- 不引入任何 npm 包、框架、构建器、CSS 框架、图标库、音频素材包。
+- 不预设依赖黑名单；可以按需引入经过技术总监评估、版本锁定、记录在案的库/框架。
+- 禁止：未经评估的依赖、CDN 运行时依赖、需要联网服务的库、包含版权素材的素材包。
 - 不为“以后可能用得上”预留复杂度；不为 P2 写代码。
 
 ---

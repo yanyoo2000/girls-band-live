@@ -2,13 +2,31 @@
   "name": "girls-band-live",
   "version": "0.1.0",
   "private": true,
-  "description": "少女乐队主题的吸血鬼幸存者玩法，由 AI 游戏工作室从企划做到发布。",
+  "type": "module",
+  "description": "少女乐队主题的吸血鬼幸存者玩法，React + TypeScript + Three.js，由 AI 游戏工作室从企划做到发布。",
   "scripts": {
-    "test": "node --test tests",
-    "build": "node tools/build.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node tools/build-single.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "validate": "node tools/validate.mjs"
   },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   }
 }

@@ -1,13 +1,13 @@
 # 制作计划 / Production Plan
 
-- **工作室**：Girls Band Live Studio（35 人）
-- **项目**：少女乐队 × 吸血鬼幸存者，原生 HTML
+- **工作室**：Girls Band Live Studio（36 人）
+- **项目**：少女乐队 × 吸血鬼幸存者，React + TypeScript + Three.js
 - **制作人（captain）**：负责编排、Git 提交、里程碑、发布与对外沟通
 - **仓库**：`yanyoo2000/girls-band-live`（开发期私有；公开发布需用户确认）
 
 ---
 
-## 1. 组织名册（35 人）
+## 1. 组织名册（36 人）
 
 ### 1.1 管理层（4）
 
@@ -15,8 +15,8 @@
 | --- | --- | --- |
 | `producer` | 制作人 | 里程碑报告、创意计票与定案、范围控制、最终验收 |
 | `creative-director` | 创意总监 | 交叉讨论主持、三案融合、GDD 主笔 |
-| `tech-director` | 技术总监 | 技术方案与接口契约、候选版集成、发布集成 |
-| `art-director` | 美术总监 | 美术方向、主题样式与 SVG 资产、视觉一致性 |
+| `tech-director` | 技术总监 | 类型契约、技术方案、候选版集成、发布集成 |
+| `art-director` | 美术总监 | 3D 美术方向、程序化模型/主题样式、视觉一致性 |
 
 ### 1.2 策划组（10）
 
@@ -38,7 +38,7 @@
 | 成员 | 角色 |
 | --- | --- |
 | `critic-fun` | 玩法乐趣评审 |
-| `critic-feasibility` | 工程可行性评审 |
+| `critic-feasibility` | 工程可行性评审（含 WebGL/3D 性能） |
 | `critic-player` | 玩家价值 / 主题表达评审 |
 | `judge-hardcore` | 硬核幸存者玩家 |
 | `judge-musicfan` | 音游 / 乐队粉丝 |
@@ -48,22 +48,23 @@
 | `judge-speedrun` | 速通 / 高难玩家 |
 | `judge-newbie` | 完全新手 |
 
-### 1.4 开发组（6）
+### 1.4 开发组（7）
 
 | 成员 | 负责模块 |
 | --- | --- |
-| `dev-engine` | 主循环、时间、RNG、输入、碰撞、实体、空间网格、相机、事件总线 |
+| `dev-engine` | 主循环、固定步长、RNG、输入、碰撞、实体、空间网格、事件总线、外部 store |
+| `dev-three` | Three.js 渲染器、场景、相机、光照、InstancedMesh、粒子/特效、舞台 |
 | `dev-combat` | 伤害、投射物、敌人、波次、Boss、武器运行时 |
 | `dev-progression` | 经验/等级、升级卡池、武器进化、被动、存档 |
 | `dev-content` | 角色/武器/敌人/波次/台词/配色数据与平衡表 |
-| `dev-ui` | 主菜单、选人、HUD、升级、暂停、结算、设置、响应式、触屏 |
+| `dev-ui` | React 屏幕路由、HUD、菜单、升级、暂停、设置、结算、响应式、触屏 |
 | `dev-audio` | WebAudio 四层音乐、音效、静音/音量、失焦处理 |
 
 ### 1.5 质量与发行（5）
 
 | 成员 | 角色 |
 | --- | --- |
-| `qa-automation` | 单元测试、构建校验、验收矩阵自动化 |
+| `qa-automation` | Vitest 单元测试、验收矩阵、构建校验 |
 | `qa-playtester` | Chrome 实机试玩、缺陷与手感反馈 |
 | `qa-compat` | 兼容性、移动端、无障碍、离线验证 |
 | `code-reviewer` | 独立代码审查（质量门） |
@@ -80,11 +81,11 @@ M2 交叉讨论（10 份互评）→ 创意总监融合出 3 个方案
       ↓
 M3 3 位评审审核 → 7 位打分员独立打分 → 制作人计票定案
       ↓
-M4 设计定稿（GDD → 技术方案 → 验收矩阵 / 美术方向）
+M4 设计定稿（GDD → 技术方案/类型 → 验收矩阵 / 美术方向）
       ↓
-M5 开发（6 模块 + 美术资产并行；QA 写测试）→ 开发门禁
+M5 开发（7 个实现模块 + 美术/3D 资产并行；QA 写测试）→ 开发门禁
       ↓
-M6 候选版集成 → 自动化验证 + 实机试玩 + 兼容性 → 代码审查 → 发布集成
+M6 候选版集成 → 类型检查/构建/测试 + 实机试玩 + 兼容性 → 代码审查 → 发布集成
       ↓
 M7 发行包装 → 最终验收 → v1.0.0
 ```
@@ -100,10 +101,10 @@ M7 发行包装 → 最终验收 → v1.0.0
 | **M1 企划提案** | 10 份独立 pitch；制作人完整性报告 | `docs/pitches/*.md`、`docs/reports/m1-pitches.md` | `feat(creative): M1 ten pitches` / `m1-pitches` |
 | **M2 交叉讨论** | 10 份互评；3 个融合方案 | `docs/discussion/*.md`、`docs/concepts/*.md`、`docs/reports/m2-discussion.md` | `docs(creative): M2 cross-review and hybrids` / `m2-discussion` |
 | **M3 评审打分** | 3 份评审；7 份打分；计票定案 | `docs/reviews/*`、`docs/scores/*`、`docs/decision/selected-concept.md`、`docs/reports/m3-selection.md` | `docs(review): M3 reviews, scores and selection` / `m3-decision` |
-| **M4 设计定稿** | GDD、技术方案、验收矩阵、美术方向 | `docs/gdd.md`、`docs/tech-spec.md`、`docs/acceptance.md`、`docs/art-direction.md`、`docs/reports/m4-design.md` | `docs(design): M4 GDD and tech spec` / `m4-design` |
-| **M5 开发** | 7 个实现任务；单元测试；开发门禁 | `src/js/*`、`src/css/*`、`src/assets/*`、`tests/*`、`docs/reports/m5-dev.md` | `feat(game): M5 core systems` / `m5-dev` |
-| **M6 测试与审查** | 候选版、自动化验证、试玩、兼容、代码审查、发布集成 | `src/index.html`、`tools/*`、`index.html`、`dist/*`、`docs/qa/*`、`docs/reports/m6-rc.md` | `feat(integration): M6 release candidate` / `m6-rc` |
-| **M7 发布** | 发行包装、最终验收、GitHub Release | `README.md`、`CHANGELOG.md`、`docs/reports/final-acceptance.md`、`docs/release-checklist.md`、`dist/girls-band-live.html` | `chore(release): M7 v1.0.0` / `v1.0.0` |
+| **M4 设计定稿** | GDD、技术方案/类型契约、依赖清单、验收矩阵、美术方向 | `docs/gdd.md`、`docs/tech-spec.md`（含依赖清单）、`docs/acceptance.md`、`docs/art-direction.md`、`src/types/*`、`docs/reports/m4-design.md` | `docs(design): M4 GDD, types and tech spec` / `m4-design` |
+| **M5 开发** | 8 个实现任务；Vitest 单元测试；开发门禁 | `src/game/*`、`src/three/*`、`src/ui/*`、`src/audio/*`、`src/data/*`、`src/styles/*`、`src/assets/*`、`tests/*`、`docs/qa/unit-report.md`、`docs/reports/m5-dev.md` | `feat(game): M5 core systems` / `m5-dev` |
+| **M6 测试与审查** | 候选版、自动化验证、实机试玩、兼容、代码审查、发布集成 | `src/main.tsx`、`index.html`、`vite.config.ts`、`tsconfig.json`、`tools/*`、`dist/*`、`docs/qa/*`、`docs/reports/m6-rc.md` | `feat(integration): M6 release candidate` / `m6-rc` |
+| **M7 发布** | 发行包装、最终验收、GitHub Release | `README.md`、`CHANGELOG.md`、`docs/release-checklist.md`、`docs/reports/final-acceptance.md`、`dist/girls-band-live.html` | `chore(release): M7 v1.0.0` / `v1.0.0` |
 
 ### 3.1 任务 DAG（关键边）
 
@@ -111,7 +112,7 @@ M7 发行包装 → 最终验收 → v1.0.0
 10 pitch → gate-m1 → 10 response → synthesis → gate-m2
         → 3 critic → 7 judge → selection → req-gdd → req-tech
         → (impl-engine … impl-art) + art-direction → gate-m4
-        → 7 impl → qa-tests → gate-m5 → candidate
+        → 8 impl → qa-tests → gate-m5 → candidate
         → verify + playtest + compat → code-review → integration
         → gate-m6 → release-package → final-acceptance
 ```
@@ -131,6 +132,7 @@ M7 发行包装 → 最终验收 → v1.0.0
 - 只有制作人执行 `git add/commit/tag/push`；成员只写文件。
 - 每个里程碑至少 1 个 commit + 1 个 annotated tag + push。
 - 提交信息使用 Conventional Commits，正文列出参与成员与任务 id。
+- `package-lock.json` 必须提交；`node_modules/` 不提交。
 
 ### 4.2 里程碑与 Issue
 
@@ -153,10 +155,10 @@ M7 发行包装 → 最终验收 → v1.0.0
 | G1 创意完整性 | producer | 10 份 pitch 齐全、结构完整、无 TBD |
 | G2 融合方案 | producer | 3 个差异明确的 hybrid + 评审 rubric 已对齐 |
 | G3 定案 | producer | 7 份独立打分 + 3 份评审 + 中位数计票 + 定案记录 |
-| G4 设计 | producer | GDD/技术方案/验收矩阵/美术方向互相一致，无未决接口 |
-| G5 开发 | producer | 7 个实现完成、语法检查通过、测试报告存在 |
-| G6 候选版 | producer | 构建/校验/测试通过、实机试玩与兼容报告完成、review pass |
-| G7 发布 | producer | 最终验收矩阵全过、README/CHANGELOG 完整、可离线打开 |
+| G4 设计 | producer | GDD/技术方案/类型契约/依赖清单/验收矩阵/美术方向互相一致，无未决接口 |
+| G5 开发 | producer | 8 个实现完成、`tsc` 对本模块无错误、测试报告存在 |
+| G6 候选版 | producer | `npm run typecheck`/`npm test`/`npm run build`/`npm run validate` 通过；实机试玩与兼容报告完成；review pass |
+| G7 发布 | producer | 最终验收矩阵全过、README/CHANGELOG 完整、单文件可离线打开 |
 
 ---
 
@@ -164,13 +166,16 @@ M7 发行包装 → 最终验收 → v1.0.0
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| 35 个智能体并行导致文件冲突 | 构建失败/返工 | 严格 inScope；一人一文件；只读共享文档；制作人统一提交 |
-| 接口漂移 | 模块无法集成 | 技术方案锁定命名空间/函数/数据结构/DOM；候选版由技术总监统一修复 |
-| 范围膨胀 | 无法按时完成 | P0 基线 + 非目标清单；评审按范围控制打分；制作人砍需求 |
+| 36 个智能体并行导致文件冲突 | 构建失败/返工 | 严格 inScope + 文件所有权表；制作人统一提交 |
+| TypeScript 接口漂移 | 类型检查失败、模块无法集成 | `src/types/` 由技术总监锁定；候选版统一修复；`tsc` 硬门 |
+| 3D/WebGL 性能不足 | 掉帧、体验差 | InstancedMesh、对象池、DPR 上限、低画质模式；QA 实测 FPS |
+| 单文件内联失败（module/CSS/资源） | 交付不可用 | 候选版先验证 `file://`；构建脚本可降级为 `dist/` + 本地服务器 |
+| 包体超预算 | 加载慢 | 依赖按需引入并登记；Three.js tree-shaking；`validate.mjs` 检查 ≤4MB；必要时裁剪依赖/压缩 |
+| 依赖供应链/许可证 | 无法发布/安全风险 | 技术总监准入评估；锁定版本；提交 lockfile；review 检查许可证与登记 |
+| React 每帧 setState | 卡顿 | 外部 store + `useSyncExternalStore` + ≤10Hz 快照；review 检查 |
 | 创意趋同 | 三案无差异 | 强制 A=稳妥/B=主题优先/C=乐趣优先；策划背景差异化 |
 | 打分同质化 | 结果失真 | 7 人独立、禁止互看；中位数汇总；可行性否决 |
-| 浏览器测试不可用 | 无法实机验证 | Chrome DevTools MCP；失败时用 Node 单测 + 静态校验 + 制作人补测 |
-| 离线单文件失败 | 交付不可用 | 构建后 `validate.mjs` 扫描外部引用；QA 用 `file://` 实测 |
+| 浏览器测试不可用 | 无法实机验证 | Chrome DevTools MCP；失败时 Node 单测 + 静态校验 + 制作人补测 |
 | 版权/原创风险 | 无法公开发布 | brief 明令原创；评审设红线；发行前人工复核 |
 | 成员产出质量不足 | 门禁反复失败 | 报告制 + 独立 review + 制作人重派；必要时 captain 接管单点 |
 
