@@ -338,42 +338,123 @@ button:focus:not(:focus-visible) {
 }
 
 /* --------------------------------------------------------------------------
- * 窗口尺寸提示（只在明显不支持的尺寸出现；1280×720 窗口含浏览器 chrome 时不误判）
+ * 小窗口：由 React 的 ViewportGate 提供可键盘关闭的提示；这里只做紧凑布局，
+ * 不再用 CSS 锁死主界面（t135 P4 / t143）。
  * ------------------------------------------------------------------------ */
 
-.viewport-warning {
-  position: fixed;
-  inset: 0;
-  z-index: var(--gbl-z-focus);
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--gbl-space-3);
-  padding: var(--gbl-space-6);
-  background: var(--gbl-color-ink);
-  text-align: center;
-}
-
-.viewport-warning__title {
-  font-size: var(--gbl-font-size-xl);
-  font-weight: 700;
-}
-
-.viewport-warning__text {
-  max-width: 46ch;
-  color: var(--gbl-color-text-dim);
-}
-
 @media (max-width: 1023px), (max-height: 639px) {
-  .viewport-warning {
-    display: flex;
+  .screen {
+    gap: var(--gbl-space-4);
+    padding: var(--gbl-space-4);
   }
 
-  .app__screen,
-  .app__overlays,
-  .toast {
+  .screen__head {
+    gap: var(--gbl-space-2);
+  }
+
+  .screen__title {
+    font-size: 28px;
+  }
+
+  .rehearsal,
+  .results__columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .menu-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    gap: var(--gbl-space-4);
+    padding: var(--gbl-space-4);
+  }
+
+  .menu-nav,
+  .menu-side,
+  .menu-foot {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .menu-nav {
+    width: 100%;
+  }
+
+  .menu-members {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .menu-record__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .menu-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hud__top {
+    top: 8px;
+    width: min(560px, 74vw);
+  }
+
+  .zone-dots {
+    inset: 12px;
+  }
+
+  .build-strip {
+    bottom: 54px;
+    left: 12px;
+    width: min(300px, 46vw);
+  }
+
+  .light-state {
+    right: 12px;
+    bottom: 62px;
+  }
+
+  .hud__pause {
+    top: 8px;
+    right: 12px;
+  }
+
+  .hud__hint {
+    top: 96px;
+    font-size: 11px;
+  }
+
+  .beat-ring {
+    width: 58px;
+    height: 58px;
+  }
+
+  .finale {
+    bottom: 92px;
+  }
+
+  .card-pedal {
+    width: min(236px, 44vw);
+    min-height: 300px;
+  }
+}
+
+@media (max-width: 760px) {
+  .zone-dot__name,
+  .build-strip__cards,
+  .build-strip__hint {
     display: none;
+  }
+
+  .build-strip {
+    width: 210px;
+  }
+
+  .light-state__cell-hint {
+    display: none;
+  }
+
+  .hud__hint {
+    width: 92vw;
+    text-align: center;
   }
 }
 

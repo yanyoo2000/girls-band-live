@@ -55,7 +55,7 @@ import type {
   ZoneId,
   ZoneState,
 } from '../types/game';
-import type { DataRegistry } from '../types/data';
+import type { DataRegistry, ModifierKey } from '../types/data';
 import type { SavePort } from '../types/save';
 import { createRng } from './rng';
 import { createEntityWorld, updateEntities } from './entities';
@@ -71,6 +71,7 @@ import { seatPositionAt } from '../data/seats';
 import { updateCrowdWave } from './crowd-wave';
 import { updateLines } from './lines';
 import {
+  MAX_RETURN_LOCK_SECONDS,
   lightEatRatio,
   stageBlackoutRemaining,
   updateNoise,
@@ -79,7 +80,7 @@ import {
 } from './enemies';
 import { resolveChoirWave, resolveIgniteDamage } from './combat';
 import { updateBoss } from './boss';
-import { addExperience, applyCard, createBuild } from './progression';
+import { addExperience, applyCard, collectModifiers, createBuild } from './progression';
 import { updateRecords } from './save';
 import { OPENING_GRACE_SEC } from '../data/segments';
 
@@ -278,7 +279,7 @@ function emptyHud(): HudSnapshot {
   const zone = (id: ZoneId): ZoneHud => ({ id, heat: 0, waiting: false, blackened: false });
   return {
     revision: 0,
-    whiteout: 0.85,
+    whiteout: 0,
     critical: false,
     zones: [zone('front-left'), zone('front-right'), zone('back-left'), zone('back-right')],
     lightCoverage: 0,
@@ -392,6 +393,7 @@ function createReturnListener(data: DataRegistry): ReturnListenerState {
     active: false,
     anchor: null,
     locked: false,
+    lockOrigin: null,
     lockSeconds: 0,
     hp: def.maxHp,
     maxHp: def.maxHp,
@@ -466,6 +468,12 @@ export function createGameStore(deps: StoreDeps): GameStore {
   let world = createEntityWorld(data, data.balance.noise.cap);
   let stats = createZeroStats();
   let prevState = new Uint8Array(0);
+  let backstageTimer = 0;
+  let decayTimer = 0;
+  let trendWindowStart = 0;
+  let trendWindowPresent = 0;
+  let nextLevelupAt = 0;
+  const lineBreakCounts: Record<InstrumentLineId, number> = { guitar: 0, bass: 0, drums: 0 };
   let activeClock: MusicClock = deps.fallbackClock;
   let cardsRng: Rng = createRng(1);
   let spawnRng: Rng = createRng(2);
@@ -596,6 +604,66 @@ export function createGameStore(deps: StoreDeps): GameStore {
     return added;
   };
 
+  /** 读本局卡效果（唯一动态入口；合成/缓存由 progression/upgrades 负责）。 */
+  const modifier = (key: ModifierKey): number => {
+    if (run === null) return 0;
+    return collectModifiers(run.build, data).get(key) ?? 0;
+  };
+
+  /** 自然衰减/代价：从任意现存观众中移除 count 人。 */
+  const removeAudience = (count: number): number => {
+    if (run === null || count <= 0) return 0;
+    const frame = run.audience;
+    let remaining = count;
+    for (let seat = frame.size - 1; seat >= 0 && remaining > 0; seat -= 1) {
+      const state = frame.state[seat] ?? 0;
+      if (state !== 1 && state !== 2 && state !== 3) continue;
+      frame.state[seat] = 4;
+      frame.heat[seat] = 0;
+      frame.phone[seat] = 0;
+      frame.tint[seat] = 0;
+      stats.leftVenue += 1;
+      remaining -= 1;
+    }
+    return count - remaining;
+  };
+
+  /** 回照（独奏）护盾与 self-duration/self-cooldown 的真实状态机。 */
+  const updateSoloState = (dt: Seconds, previousMode: LightMode): void => {
+    if (run === null) return;
+    const maxShield = Math.max(0, modifier('shield-max'));
+    const regen = Math.max(0, modifier('shield-regen'));
+    const duration = Math.max(0, modifier('self-duration'));
+    const cooldownCost = Math.max(0, modifier('self-cooldown'));
+    const light = run.light;
+    if (maxShield <= 0) {
+      light.soloShield = 0;
+      light.soloRemaining = 0;
+      return;
+    }
+    if (light.mode === 'self') {
+      if (previousMode !== 'self') {
+        light.soloShield = maxShield;
+        light.soloRemaining = 4 + duration;
+      }
+      light.soloRemaining = Math.max(0, light.soloRemaining - dt);
+      if (light.soloShield < maxShield) {
+        const beatSec = Math.max(0.001, 60 / data.beatGrid.bpm);
+        light.soloShield = Math.min(maxShield, light.soloShield + (regen * dt) / (beatSec * 2));
+      }
+      if (light.soloRemaining <= 0) {
+        light.soloShield = 0;
+        light.selfCooldown = 2 + cooldownCost;
+        light.mode = 'spread';
+        light.radius = data.lightForms.spread.radius;
+      }
+    } else if (previousMode === 'self') {
+      light.soloShield = 0;
+      light.soloRemaining = 0;
+      if (light.selfCooldown <= 0) light.selfCooldown = 1 + cooldownCost;
+    }
+  };
+
   /** 安可：把人气恢复到目标值（优先复活离场观众，其次填空座）。 */
   const restoreAudience = (target: number): number => {
     if (run === null) {
@@ -631,6 +699,8 @@ export function createGameStore(deps: StoreDeps): GameStore {
     if (run === null) {
       return emptyHud();
     }
+    // 局内统计回写：HUD 账条与结算同源（t139 / 反馈 §6）。
+    run.stats = statsSnapshot(stats, run.time);
     const present = countPresent(run.audience, null);
     const whiteout = computeWhiteout(present, capacity, Math.max(1, stats.peakAudience, present));
     const lit = queryLitSeats(run, data, litSeats);
@@ -689,6 +759,39 @@ export function createGameStore(deps: StoreDeps): GameStore {
       holdProgress,
       encoreAvailable: !run.encoreUsed,
       runSeconds: run.time,
+      lightMode: run.light.mode,
+      igniteCooldown: clamp(run.light.igniteCooldown / 0.5, 0, 1),
+      soloShield: Math.max(0, modifier('shield-max')) > 0
+        ? clamp(run.light.soloShield / Math.max(1, modifier('shield-max')), 0, 1)
+        : 0,
+      returnLockRemaining: run.returnListener.locked
+        ? Math.max(0, MAX_RETURN_LOCK_SECONDS - run.returnListener.lockSeconds)
+        : 0,
+      maxLockSeconds: MAX_RETURN_LOCK_SECONDS,
+      lockRemaining: run.returnListener.locked
+        ? Math.max(0, MAX_RETURN_LOCK_SECONDS - run.returnListener.lockSeconds)
+        : 0,
+      maxLock: MAX_RETURN_LOCK_SECONDS,
+      level: run.level ?? 0,
+      xp: run.xp ?? 0,
+      nextLevelXp: run.nextLevelXp ?? 0,
+      zoneOccupancy: [
+        clamp(countPresent(run.audience, 'front-left') / 192, 0, 1),
+        clamp(countPresent(run.audience, 'front-right') / 192, 0, 1),
+        clamp(countPresent(run.audience, 'back-left') / 192, 0, 1),
+        clamp(countPresent(run.audience, 'back-right') / 192, 0, 1),
+      ],
+      zoneLightRatios: [
+        clamp(run.zones['front-left'].litSeats / 192, 0, 1),
+        clamp(run.zones['front-right'].litSeats / 192, 0, 1),
+        clamp(run.zones['back-left'].litSeats / 192, 0, 1),
+        clamp(run.zones['back-right'].litSeats / 192, 0, 1),
+      ],
+      audienceTrend:
+        present > trendWindowPresent ? 1 : present < trendWindowPresent ? -1 : 0,
+      audienceLow: present === 0 || present <= stats.peakAudience * 0.15,
+      emptySeats: Math.max(0, capacity - present),
+      secondRowEmpty: countSecondRowEmpty(data, run.audience),
     };
   };
 
@@ -825,6 +928,9 @@ export function createGameStore(deps: StoreDeps): GameStore {
         sweptZones: 0,
         sweepBonusCharges: 0,
         lightingZone: null,
+        soloShield: 0,
+        soloRemaining: 0,
+        selfCooldown: 0,
       },
       player: {
         position: { x: playerPosition.x, z: playerPosition.z },
@@ -849,10 +955,21 @@ export function createGameStore(deps: StoreDeps): GameStore {
       failure: null,
       ending: null,
       hudRevision: 0,
+      level: 0,
+      xp: 0,
+      nextLevelXp: 25,
     };
 
     stats = createZeroStats();
     stats.peakAudience = countPresent(audience, null);
+    backstageTimer = 0;
+    decayTimer = 0;
+    trendWindowStart = 0;
+    trendWindowPresent = stats.peakAudience;
+    nextLevelupAt = 0;
+    lineBreakCounts.guitar = 0;
+    lineBreakCounts.bass = 0;
+    lineBreakCounts.drums = 0;
     prevState = new Uint8Array(audience.size);
     prevState.set(audience.state);
     lightPathCount = 0;
@@ -1008,6 +1125,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
       zoneCounts: zoneCounts(),
       emptySeats: Math.max(0, capacity - present),
       secondRowEmpty: countSecondRowEmpty(data, run.audience),
+      lineBreaks: { ...lineBreakCounts },
       failure,
     };
     run.stats = snapshot;
@@ -1085,7 +1203,9 @@ export function createGameStore(deps: StoreDeps): GameStore {
     run.player.holdSeconds = input.holdSeconds;
 
     // 2) 光（形态/惯性/锚点/扫场）。
+    const previousLightMode = run.light.mode;
     updateLight(run, input, data, dt);
+    updateSoloState(dt, previousLightMode);
     // 失真「吞光」：锥长按被吞比例收窄（GDD §8.1，每只 30%、上限 60%）。
     const eaten = lightEatRatio(run);
     if (eaten > 0) {
@@ -1148,6 +1268,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
         continue;
       }
       emit({ kind: 'line', time: run.time, beatIndex, action: 'break', line: lineId });
+      lineBreakCounts[lineId] += 1;
       deps.audio.playCue('line-snap', null);
       cue('line-snap', null);
     }
@@ -1258,6 +1379,32 @@ export function createGameStore(deps: StoreDeps): GameStore {
     stats.covered += delta.black;
     xpThisTick += delta.converted;
 
+    // 10b) 卡效果：第二排 / 自然衰减（t139 接线）。
+    const presentNow = countPresent(run.audience, null);
+    if (run.time - trendWindowStart >= 10) {
+      trendWindowStart = run.time;
+      trendWindowPresent = presentNow;
+    }
+    const backstage = Math.max(0, modifier('backstage-audience-per-30s'));
+    if (backstage > 0) {
+      backstageTimer += dt;
+      while (backstageTimer >= 30) {
+        backstageTimer -= 30;
+        const added = addColoredAudience(backstage);
+        stats.converted += added;
+        xpThisTick += added;
+      }
+    }
+    const decayRate = Math.max(0, modifier('audience-decay-rate'));
+    if (decayRate > 0) {
+      decayTimer += dt;
+      while (decayTimer >= 30) {
+        decayTimer -= 30;
+        const lose = Math.max(1, Math.ceil(presentNow * decayRate));
+        removeAudience(lose);
+      }
+    }
+
     // H1：开场宽限 / 首次 pointermove 前，不累计区过热计时，也不触发返听锁定。
     // 光本身的锚点在 light.ts 里同步清零；这里清区级 litSeconds（否则 8s 过热仍会提前）。
     if (run.time < OPENING_GRACE_SEC || !hasPlayerMovedLight(run)) {
@@ -1305,12 +1452,19 @@ export function createGameStore(deps: StoreDeps): GameStore {
 
     // 12) 经验与升级（冻结由 phase 处理）。
     const crowdWaveXp = data.progression.experience.crowdWave;
-    const experience = xpThisTick + (wave.triggered > 0 ? crowdWaveXp : 0);
-    if (experience > 0) {
+    // t139 节奏：前 3 分钟压低经验，之后逐步提速；两次升级至少间隔 8s，避免背靠背弹窗。
+    const xpScale =
+      run.time < 180
+        ? 0.3
+        : 0.3 + Math.min(1.2, ((run.time - 180) / 390) * 1.2);
+    const experience =
+      (xpThisTick + (wave.triggered > 0 ? crowdWaveXp : 0)) * xpScale;
+    if (experience > 0 && run.phase !== 'empty-house' && run.time >= nextLevelupAt) {
       const offer = addExperience(run, experience, cardsRng);
       if (offer !== null) {
         run.offer = offer;
         run.phase = 'levelup';
+        nextLevelupAt = run.time + 8;
         emit({ kind: 'levelup', time: run.time, beatIndex, offer });
         publishHud(true);
         updateRender();
@@ -1322,6 +1476,15 @@ export function createGameStore(deps: StoreDeps): GameStore {
     const present = countPresent(run.audience, null);
     stats.peakAudience = Math.max(stats.peakAudience, present);
     if (present === 0 && run.phase !== 'empty-house') {
+      // t139：归零当帧若还有安可，先给“安可 / 继续独奏”窗口，而不是直接锁死空场。
+      if (!run.encoreUsed) {
+        run.phase = 'paused';
+        waitEncore = true;
+        run.lowAudienceBars = data.balance.run.lowAudienceBars;
+        publishHud(true);
+        updateRender();
+        return;
+      }
       run.phase = 'empty-house';
       deps.audio.setSilenced(true);
     }
@@ -1555,9 +1718,13 @@ export function createGameStore(deps: StoreDeps): GameStore {
     if (run === null) {
       return;
     }
-    const target = Math.max(
-      data.balance.run.encoreMinAudience,
-      Math.round(stats.peakAudience * data.balance.run.encoreRestoreRatio),
+    const retain = Math.max(0, modifier('encore-retain'));
+    const target = Math.min(
+      Math.max(1, stats.peakAudience),
+      Math.max(
+        data.balance.run.encoreMinAudience,
+        Math.round(stats.peakAudience * (retain > 0 ? retain : data.balance.run.encoreRestoreRatio)),
+      ),
     );
     const restored = restoreAudience(target);
     run.encoreUsed = true;

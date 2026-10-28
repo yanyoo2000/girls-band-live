@@ -2,7 +2,7 @@
  * 12 声部观众合唱池：4 区 × 3 层（近 / 中 / 远），每声部 1 osc + 1 gain + 1 panner。
  *
  * 依据：docs/tech-spec.md §13.1、docs/gdd.md §17.1。
- * - 节点预算：12 × 3 = 36，加呼吸链 3、总线 3，共 42（≤44）。
+ * - 节点预算：12 × 3 = 36，加呼吸链 3、总线 4（含存在感提升），共 43（≤44）。
  * - 人数驱动的是“厚度”（逐层加入 + 总线补偿），不是单纯变响。
  */
 
@@ -20,6 +20,25 @@ const SEATS_PER_LAYER = 64;
 const LAYER_TRIM: readonly number[] = [1, 0.85, 0.7];
 /** 层声像偏移（以区中心为 0，向两侧扇形展开）。 */
 const LAYER_PAN: readonly number[] = [-0.35, 0, 0.35];
+/** 单声部基础增益：常规 C 局（总人气 30–61）也要可闻（原 0.22 实测 −30~−45dB）。 */
+export const CHOIR_VOICE_GAIN = 0.38;
+/** 合唱存在感提升：1.4kHz +3dB，从 lead/arp 的 1–2kHz 里让出一块。 */
+const PRESENCE_FREQ = 1400;
+const PRESENCE_GAIN_DB = 3;
+
+/**
+ * 单声部目标增益（纯函数，供混音与测试共用）。
+ *
+ * 四档总人气 30/61/128/256（每区 7.5/15.25/32/64）对应约
+ * −17.7 / −14.7 / −11.4 / −8.4 dB；逐层加入 + 总线 −3dB 补偿保持不变。
+ */
+export function choirVoiceGain(audience: number, layer: number, zoneGain: number): number {
+  const layerAudience = Math.max(0, Math.min(SEATS_PER_LAYER, audience - layer * SEATS_PER_LAYER));
+  const level = Math.sqrt(layerAudience / SEATS_PER_LAYER) * CHOIR_VOICE_GAIN;
+  const trim = LAYER_TRIM[layer] ?? 0.7;
+  const clampedZone = Math.max(0, Math.min(1, zoneGain));
+  return Math.max(0, Math.min(1, clampedZone * level * trim));
+}
 
 /** 合唱池公开句柄（与 tech-spec §5.5 一致）。 */
 export interface ChoirPool {
@@ -97,10 +116,16 @@ export function createChoirPool(ctx: BaseAudioContext, data: DataRegistry): Choi
   const bus = ctx.createGain();
   bus.gain.value = 1;
 
-  sum.connect(compressor);
+  const presence = ctx.createBiquadFilter();
+  presence.type = 'peaking';
+  presence.frequency.value = PRESENCE_FREQ;
+  presence.Q.value = 1.2;
+  presence.gain.value = PRESENCE_GAIN_DB;
+  sum.connect(presence);
+  presence.connect(compressor);
   compressor.connect(bus);
 
-  const nodes: AudioNode[] = [sum, compressor, bus];
+  const nodes: AudioNode[] = [sum, presence, compressor, bus];
   const voices: ChoirState['voices'] = [];
   const now = ctx.currentTime;
 
@@ -176,10 +201,7 @@ export function createChoirPool(ctx: BaseAudioContext, data: DataRegistry): Choi
         const zoneMix = mix[voice.zone];
         if (!zoneMix) continue;
         const audience = Math.max(0, zoneMix.audience);
-        const layerAudience = Math.max(0, Math.min(SEATS_PER_LAYER, audience - voice.layer * SEATS_PER_LAYER));
-        const level = Math.sqrt(layerAudience / SEATS_PER_LAYER) * 0.22;
-        const trim = LAYER_TRIM[voice.layer] ?? 0.7;
-        const target = Math.max(0, Math.min(1, zoneMix.gain)) * level * trim;
+        const target = choirVoiceGain(audience, voice.layer, zoneMix.gain);
         voice.gain.gain.setTargetAtTime(target, at, 0.08);
         const pan = Math.max(-1, Math.min(1, zoneMix.pan + (LAYER_PAN[voice.layer] ?? 0)));
         voice.panner.pan.setTargetAtTime(pan, at, 0.08);

@@ -11,6 +11,7 @@ import { useUi } from './ui/hooks';
 import { Button } from './ui/components/Button';
 import { ScreenShell } from './ui/components/ScreenShell';
 import { Toast } from './ui/components/Toast';
+import { ViewportGate } from './ui/components/ViewportGate';
 import { OVERLAY_LABELS, SCREEN_LABELS } from './ui/copy';
 import { BootScreen } from './ui/screens/BootScreen';
 import { CreditsScreen } from './ui/screens/CreditsScreen';
@@ -77,6 +78,7 @@ function renderScreen(ui: UiState, bridge: UiBridge, overlay: OverlayKind): Reac
       return (
         <ResultsScreen
           view={ui.result}
+          bridge={bridge}
           onRestart={() => bridge.dispatch({ type: 'restart-run', seed: null })}
           onMenu={() => navigate('menu')}
         />
@@ -105,6 +107,7 @@ function renderOverlay(ui: UiState, bridge: UiBridge): ReactElement | null {
       return (
         <PauseOverlay
           view={ui.pause}
+          bridge={bridge}
           onResume={() => bridge.dispatch({ type: 'close-overlay' })}
           onRestart={() => bridge.dispatch({ type: 'restart-run', seed: null })}
           onSettings={() => bridge.dispatch({ type: 'open-overlay', overlay: 'settings' })}
@@ -118,6 +121,7 @@ function renderOverlay(ui: UiState, bridge: UiBridge): ReactElement | null {
       return (
         <LevelUpOverlay
           view={ui.levelUp}
+          bridge={bridge}
           onChoose={(cardId) => bridge.dispatch({ type: 'choose-card', cardId })}
         />
       );
@@ -203,17 +207,16 @@ export function App({ bridge }: { readonly bridge: UiBridge }): ReactElement {
       >
         {renderScreen(ui, bridge, overlay)}
       </main>
-      <div className="app__overlays">{renderOverlay(ui, bridge)}</div>
+      <div className="app__overlays">
+        {renderOverlay(ui, bridge)}
+        <ViewportGate onMenu={() => bridge.dispatch({ type: 'navigate', screen: 'menu' })} />
+      </div>
       {ui.toast === null ? null : (
         <Toast toast={ui.toast} onDismiss={() => bridge.dispatch({ type: 'dismiss-toast' })} />
       )}
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
-      <div className="viewport-warning" role="note">
-        <p className="viewport-warning__title">窗口太小了</p>
-        <p className="viewport-warning__text">本作只支持桌面键盘与鼠标。请把窗口放大到能看清舞台的尺寸。</p>
-      </div>
     </div>
   );
 }

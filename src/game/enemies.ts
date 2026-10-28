@@ -53,6 +53,8 @@ export const RETURN_LISTENER_CRACK_INTERVAL_SCALE = 0.2;
 
 /** 返听锁定时每 1.5s 在光锥边缘生 1 只啸叫（GDD §8.2）。 */
 export const RETURN_LISTENER_SCREAM_INTERVAL: Seconds = 1.5;
+/** 返听最长锁定秒数（t139 兜底；到点强制解除，避免不可逆死亡螺旋）。 */
+export const MAX_RETURN_LOCK_SECONDS: Seconds = 7;
 
 /** 失真吞光：每只吞掉 30% 锥长（GDD §8.1）。 */
 export const DISTORTION_LIGHT_EAT = 0.3;
@@ -370,6 +372,7 @@ export function updateReturnListener(
       state.active = true;
       state.anchor = nearestSpeakerStack(data, run.light.position);
       state.locked = true;
+      state.lockOrigin = { x: run.light.position.x, z: run.light.position.z };
       state.lockSeconds = 0;
       state.hp = def.maxHp;
       state.maxHp = def.maxHp;
@@ -399,12 +402,22 @@ export function updateReturnListener(
     const anchor = state.anchor;
     const lightPoint = run.light.position;
     const distance = distanceXZ(lightPoint, anchor);
+    const movedFromLock =
+      state.lockOrigin === null
+        ? 0
+        : distanceXZ(lightPoint, state.lockOrigin);
 
-    if (distance > data.balance.antiCamp.releaseDistance) {
+    if (
+      distance > data.balance.antiCamp.releaseDistance ||
+      movedFromLock >= data.balance.antiCamp.releaseDistance ||
+      state.lockSeconds >= MAX_RETURN_LOCK_SECONDS
+    ) {
       released = state.locked;
       state.locked = false;
+      state.lockOrigin = null;
       state.lockSeconds = 0;
       ledger.losSeconds = 0;
+      if (released) state.spawnCooldown = Math.max(4, state.spawnCooldown);
     } else {
       const facing = angleFrom(anchor, lightPoint);
       const delta = Math.abs(angleDelta(facing, ledger.facing));

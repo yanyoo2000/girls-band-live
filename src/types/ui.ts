@@ -105,6 +105,10 @@ export interface LevelUpView {
     readonly maxPicks: number;
     readonly evolutionName: string | null;
   };
+  /** 等级/XP（t143 进度用；可选，旧桥不填）。 */
+  readonly level?: number;
+  readonly xp?: number;
+  readonly nextLevelXp?: number;
 }
 
 /** 暂停面板。 */

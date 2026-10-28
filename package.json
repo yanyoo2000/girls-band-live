@@ -1,6 +1,6 @@
 {
   "name": "girls-band-live",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "少女乐队主题的吸血鬼幸存者玩法，React + TypeScript + Three.js，由 AI 游戏工作室从企划做到发布。",

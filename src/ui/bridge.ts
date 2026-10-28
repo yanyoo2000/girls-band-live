@@ -20,6 +20,8 @@ import type {
   RunPhase,
   RunResult,
   RunState,
+  LightMode,
+  InstrumentLineId,
   SegmentId,
   Vec2,
   ZoneId,
@@ -74,13 +76,24 @@ export interface BridgeDeps {
 }
 
 /** 战斗 HUD 之外的 run 摘要（补充 `HudSnapshot` 没有的构筑/空场/中断信息）。 */
+export interface EvolutionCardHint {
+  /** 对应进化名。 */
+  readonly name: string;
+  /** 选下这张卡后还缺的支援张数。 */
+  readonly missing: number;
+  /** 该进化需要的支援总数。 */
+  readonly total: number;
+  readonly kind: 'core' | 'support' | 'ready' | 'locked';
+}
+
+/** 战斗 HUD 之外的 run 摘要（补充 `HudSnapshot` 没有的构筑/空场/中断信息）。 */
 export interface RunUiFlags {
   readonly phase: RunPhase | 'idle';
   readonly emptyHouse: boolean;
   /** 连续 8 小节低于峰值 8%，且还有安可：UI 显示「安可 / 继续独奏」。 */
   readonly interruptPending: boolean;
   readonly encoreAvailable: boolean;
-  /** 只在 playing/paused 相位允许暂停（空场/终曲放下光后不再暂停）。 */
+  /** 只在 playing/paused/empty-house/finale-hold 相位允许暂停。 */
   readonly canPause: boolean;
   readonly cards: readonly CardDef[];
   readonly core: CardDef | null;
@@ -89,6 +102,26 @@ export interface RunUiFlags {
   readonly converted: number;
   readonly burned: number;
   readonly covered: number;
+  /** 光形态/护盾（HUD 三形态与独奏读数；可选，兼容旧 UI）。 */
+  readonly lightMode?: LightMode;
+  readonly soloShield?: number;
+  readonly returnLockRemaining?: number;
+  readonly maxLockSeconds?: number;
+  readonly lockRemaining?: number;
+  readonly maxLock?: number;
+  readonly level?: number;
+  readonly xp?: number;
+  readonly nextLevelXp?: number;
+  /** 空场后禁用三选一/允许重开（t143 流程用）。 */
+  readonly levelUpEnabled?: boolean;
+  readonly canRestart?: boolean;
+  /** 本局断线次数（结算 3 条败因用）。 */
+  readonly lineBreaks?: Readonly<Record<InstrumentLineId, number>>;
+  /** 当前进化名（暂停面板/结算用）。 */
+  readonly evolutionName?: string | null;
+  /** 本次三选一每张卡的进化进度（卡面「还需 N 张支援」）。 */
+  readonly evolutionCardHints?: Readonly<Record<string, EvolutionCardHint>>;
+  readonly offerId?: number;
 }
 
 /** run 摘要订阅面（bridge 的附加能力，向后兼容基础 `UiBridge`）。 */
@@ -111,6 +144,11 @@ const TOAST_MS = 2800;
 const FAILURE_AUTO_MS = 5000;
 const SAVE_DEBOUNCE_MS = 250;
 const AUDIENCE_CAPACITY_FALLBACK = 768;
+const EMPTY_LINE_BREAKS: Readonly<Record<InstrumentLineId, number>> = {
+  guitar: 0,
+  bass: 0,
+  drums: 0,
+};
 
 const FALLBACK_HUD: HudSnapshot = {
   revision: 0,
@@ -149,6 +187,9 @@ const IDLE_RUN: RunUiFlags = {
   converted: 0,
   burned: 0,
   covered: 0,
+  lineBreaks: EMPTY_LINE_BREAKS,
+  evolutionName: null,
+  evolutionCardHints: {},
 };
 
 /* ==========================================================================
@@ -384,6 +425,9 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
         maxPicks: deps.data.progression.maxPicks,
         evolutionName: evolutionId === null ? null : deps.data.evolutions[evolutionId].name,
       },
+      level: run?.level ?? 0,
+      xp: run?.xp ?? 0,
+      nextLevelXp: run?.nextLevelXp ?? 0,
     };
   };
 
@@ -418,18 +462,70 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     };
   };
 
+  /** 为本次 offer 的每张卡计算进化进度（卡面「还需 N 张支援」）。 */
+  const buildEvolutionCardHints = (run: RunState): Readonly<Record<string, EvolutionCardHint>> => {
+    const offer = run.offer;
+    if (offer === null) {
+      return {};
+    }
+    const held = new Set<CardId>(run.build.cards);
+    const coreId = run.build.coreCard;
+    const hints: Record<string, EvolutionCardHint> = {};
+    for (const cardId of offer.cards) {
+      for (const evolution of Object.values(deps.data.evolutions)) {
+        if (evolution.core === cardId) {
+          const missing = evolution.requires.filter((required) => !held.has(required)).length;
+          hints[cardId] = {
+            name: evolution.name,
+            missing,
+            total: evolution.requires.length,
+            kind: 'core',
+          };
+          break;
+        }
+        if (evolution.requires.includes(cardId)) {
+          if (coreId !== evolution.core) {
+            hints[cardId] = {
+              name: evolution.name,
+              missing: evolution.requires.length,
+              total: evolution.requires.length,
+              kind: 'locked',
+            };
+          } else {
+            const missing = evolution.requires.filter(
+              (required) => required !== cardId && !held.has(required),
+            ).length;
+            hints[cardId] = {
+              name: evolution.name,
+              missing,
+              total: evolution.requires.length,
+              kind: missing === 0 ? 'ready' : 'support',
+            };
+          }
+          break;
+        }
+      }
+    }
+    return hints;
+  };
+
   const buildRunFlags = (run: RunState | null): RunUiFlags => {
     if (run === null) {
       return IDLE_RUN;
     }
     const cards = run.build.cards.map((id) => deps.data.cards[id]);
     const core = run.build.coreCard === null ? null : deps.data.cards[run.build.coreCard];
+    const evolutionId = run.build.evolution;
     return {
       phase: run.phase,
       emptyHouse: run.phase === 'empty-house',
       interruptPending: isWaitingEncore(run),
       encoreAvailable: !run.encoreUsed,
-      canPause: run.phase === 'playing' || run.phase === 'paused',
+      canPause:
+        run.phase === 'playing' ||
+        run.phase === 'paused' ||
+        run.phase === 'empty-house' ||
+        run.phase === 'finale-hold',
       cards,
       core,
       picks: run.build.picks,
@@ -437,6 +533,25 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       converted: run.stats.converted,
       burned: run.stats.burned,
       covered: run.stats.covered,
+      lightMode: run.light.mode,
+      soloShield: run.light.soloShield,
+      returnLockRemaining: run.returnListener.locked
+        ? Math.max(0, 7 - run.returnListener.lockSeconds)
+        : 0,
+      maxLockSeconds: 7,
+      lockRemaining: run.returnListener.locked
+        ? Math.max(0, 7 - run.returnListener.lockSeconds)
+        : 0,
+      maxLock: 7,
+      level: run.level ?? 0,
+      xp: run.xp ?? 0,
+      nextLevelXp: run.nextLevelXp ?? 0,
+      levelUpEnabled: run.phase === 'playing' || run.phase === 'levelup',
+      canRestart: true,
+      lineBreaks: { ...lineBreakCounts },
+      evolutionName: evolutionId === null ? null : deps.data.evolutions[evolutionId].name,
+      evolutionCardHints: buildEvolutionCardHints(run),
+      offerId: run.offer?.offerId ?? 0,
     };
   };
 
@@ -452,12 +567,38 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       a.converted !== b.converted ||
       a.burned !== b.burned ||
       a.covered !== b.covered ||
+      a.level !== b.level ||
+      a.xp !== b.xp ||
+      a.nextLevelXp !== b.nextLevelXp ||
+      a.levelUpEnabled !== b.levelUpEnabled ||
+      a.canRestart !== b.canRestart ||
+      a.evolutionName !== b.evolutionName ||
+      a.offerId !== b.offerId ||
+      a.lineBreaks?.guitar !== b.lineBreaks?.guitar ||
+      a.lineBreaks?.bass !== b.lineBreaks?.bass ||
+      a.lineBreaks?.drums !== b.lineBreaks?.drums ||
       a.cards.length !== b.cards.length
     ) {
       return false;
     }
     if ((a.core?.id ?? null) !== (b.core?.id ?? null)) {
       return false;
+    }
+    // offer 变化时 hints 整体重算；offerId 已比较，这里只防止旧桥无 offerId。
+    if (a.evolutionCardHints !== b.evolutionCardHints) {
+      if (a.evolutionCardHints === undefined || b.evolutionCardHints === undefined) {
+        return false;
+      }
+      const aKeys = Object.keys(a.evolutionCardHints);
+      const bKeys = Object.keys(b.evolutionCardHints);
+      if (aKeys.length !== bKeys.length) {
+        return false;
+      }
+      for (const key of aKeys) {
+        if (a.evolutionCardHints[key]?.missing !== b.evolutionCardHints[key]?.missing) {
+          return false;
+        }
+      }
     }
     for (let index = 0; index < a.cards.length; index += 1) {
       if (a.cards[index]?.id !== b.cards[index]?.id) {
@@ -570,20 +711,25 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     });
   };
 
-  const showPause = (dispatchPause: boolean): void => {
+  const showPause = (dispatchPause: boolean, focus: 'resume' | 'build' = 'resume'): void => {
     const run = readRun();
     if (run === null) {
       return;
     }
-    // 空场与终曲放下光后不再允许暂停（game 层也不会接受 pause）。
-    if (run.phase !== 'playing' && run.phase !== 'paused') {
+    // 空场/终曲放下光后 game 不会接受 pause；UI 仍给暂停面板以提供重开/回菜单出口。
+    const pauseable =
+      run.phase === 'playing' ||
+      run.phase === 'paused' ||
+      run.phase === 'empty-house' ||
+      run.phase === 'finale-hold';
+    if (!pauseable) {
       return;
     }
     // 中断选择处于冻结中：Esc/Tab 不能绕过「安可 / 继续独奏」。
     if (isWaitingEncore(run)) {
       return;
     }
-    if (dispatchPause) {
+    if (dispatchPause && run.phase === 'playing') {
       try {
         deps.store.dispatch({ type: 'pause' });
       } catch {
@@ -596,6 +742,14 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       pause: buildPause(),
       levelUp: null,
     });
+    if (focus === 'build') {
+      // Tab 的目标是「打开构筑」：面板挂载后把焦点送到构筑标题，而不是继续按钮。
+      setTimeout(() => {
+        if (typeof document.querySelector === 'function') {
+          document.querySelector<HTMLElement>('[data-pause-build]')?.focus();
+        }
+      }, 0);
+    }
   };
 
   const startRun = (seed: number | null, restart: boolean): void => {
@@ -605,6 +759,8 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     overlayReturn = null;
     pendingResults = false;
     lastResult = null;
+    // 先清空 HUD/暂停/升级快照，避免“再演一场”首帧沿用上一局 chips/core。
+    hudSnapshot = FALLBACK_HUD;
     runSnapshot = IDLE_RUN;
     try {
       if (restart) {
@@ -767,6 +923,12 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
           route: { screen: 'playing', overlay: 'pause', backTo: null },
           pause: buildPause(),
         });
+        // 从设置/离开确认返回时，把焦点还给「设置」按钮，避免落到 inert 主区域。
+        setTimeout(() => {
+          if (typeof document.querySelector === 'function') {
+            document.querySelector<HTMLElement>('[data-pause-settings]')?.focus();
+          }
+        }, 0);
       } else {
         setRoute('playing', 'none');
       }
@@ -906,6 +1068,8 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       pause: null,
       failure: null,
     });
+    // run.offer 刚写入；刷新一次让「还需 N 张支援」立即出现在卡面。
+    refreshRun(true);
   };
 
   const onFailure = (card: FailureCard): void => {
@@ -946,7 +1110,19 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
 
     const resultView = buildResult(result, newBestAudience, newBestRank);
     const shouldAdvance = pendingResults || state.route.overlay !== 'failure';
-    runSnapshot = IDLE_RUN;
+    // 结算页仍需要「断线/进化/卡牌」同源数据；保留一帧最终 run 摘要，而不是清空成 IDLE。
+    runSnapshot = {
+      ...buildRunFlags(readRun()),
+      phase: 'results',
+      emptyHouse: result.ending === 'empty-house',
+      canPause: false,
+      canRestart: true,
+      levelUpEnabled: false,
+      lineBreaks: { ...lineBreakCounts },
+      converted: result.stats.converted,
+      burned: result.stats.burned,
+      covered: result.stats.covered,
+    };
     notify(runListeners);
 
     if (shouldAdvance) {
@@ -993,15 +1169,19 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       case 'encore':
         pushToast('安可：他们又抬头了。', 'info');
         return;
-      case 'line':
-        if (event.action === 'break') {
-          lineBreakCounts[event.line] += 1;
-          pushToast('线断了。靠近队友，按 E 插线。', 'warn');
-        }
-        return;
       case 'return-listener':
         if (event.action === 'lock') {
-          pushToast('返听锁定了你的光。移光，或者烧掉它。', 'warn');
+          pushToast('返听锁定了你的光。移光，或者断视线。', 'warn');
+        } else if (event.action === 'unlock' || event.action === 'burn') {
+          pushToast('挣脱返听。光又归你了。', 'info');
+        }
+        return;
+      case 'line':
+        if (event.action === 'plugged') {
+          pushToast('线接回去了。', 'info');
+        } else if (event.action === 'break') {
+          lineBreakCounts[event.line] += 1;
+          pushToast('线断了。靠近队友，按 E 插线。', 'warn');
         }
         return;
       case 'silence':
@@ -1029,6 +1209,10 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     if (event.defaultPrevented) {
       return;
     }
+    // 小窗口提示是更高优先级的模态：Tab/Esc 只作用于它，不能顺手开暂停/改路由。
+    if (document.documentElement?.dataset?.viewportGate === 'true') {
+      return;
+    }
     if (event.key === 'Escape') {
       handleEscape();
       return;
@@ -1039,11 +1223,44 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
           return;
         }
         event.preventDefault();
-        openOverlay('pause');
+        showPause(true, 'build');
       }
     }
   };
   document.addEventListener('keydown', onGlobalKeyDown);
+
+  /**
+   * 失焦/切标签自动暂停（t143，t135 P5）。
+   *
+   * 只在真正进行中的 `playing` 相位生效；levelup/failure/空场已经冻结或无危险，
+   * 不叠加弹层。调用 `showPause` 会 dispatch game pause（冻结模拟 + suspend audio）。
+   */
+  const pauseForFocusLoss = (): void => {
+    if (state.route.screen !== 'playing' || state.route.overlay !== 'none') {
+      return;
+    }
+    const run = readRun();
+    if (run === null || run.phase !== 'playing' || isWaitingEncore(run)) {
+      return;
+    }
+    showPause(true, 'resume');
+  };
+
+  const onVisibilityChange = (): void => {
+    if (document.hidden) {
+      pauseForFocusLoss();
+    }
+  };
+  const onWindowBlur = (): void => {
+    if (typeof document.hasFocus === 'function' && document.hasFocus()) {
+      return;
+    }
+    pauseForFocusLoss();
+  };
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  if (typeof window !== 'undefined') {
+    window.addEventListener('blur', onWindowBlur);
+  }
 
   const onFirstGesture = (): void => {
     markAudioUnlocked();
@@ -1197,6 +1414,10 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       recordsReloadTimer = null;
     }
     document.removeEventListener('keydown', onGlobalKeyDown);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('blur', onWindowBlur);
+    }
     document.removeEventListener('pointerdown', onFirstGesture, true);
     document.removeEventListener('keydown', onFirstGesture, true);
     uiListeners.clear();

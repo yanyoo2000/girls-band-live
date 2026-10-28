@@ -21,6 +21,7 @@ import type {
   Circle,
   IgniteQuality,
   InputFrame,
+  LightMode,
   MusicalPosition,
   Ratio,
   RunState,
@@ -204,9 +205,12 @@ export function updateLight(run: RunState, input: InputFrame, data: DataRegistry
   const pointer: Vec2 = usePointer ? input.pointerWorld : light.target;
 
   // 1) 形态判定（三种互斥；回照优先于束光，因为“把光收回脚下”是明确的意图）。
+  // 独奏冷却期间强制散光（self-cooldown 的消费点）。
+  light.selfCooldown = Math.max(0, light.selfCooldown - dt);
   const center = selfCenter(data);
   const wantsSelf = distance(pointer, center) <= SELF_LIGHT_RADIUS;
-  const nextMode = wantsSelf ? 'self' : input.beamHeld ? 'beam' : 'spread';
+  let nextMode: LightMode = wantsSelf ? 'self' : input.beamHeld ? 'beam' : 'spread';
+  if (nextMode === 'self' && light.selfCooldown > 0) nextMode = 'spread';
   light.mode = nextMode;
   const form = data.lightForms[nextMode];
   light.radius = form.radius;

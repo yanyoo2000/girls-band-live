@@ -33,6 +33,7 @@ import type {
   ZoneId,
 } from '../types/game';
 import type { DataRegistry, SegmentDef } from '../types/data';
+import { collectModifiers } from './progression';
 import { seatAtPoint, seatPositionAt } from '../data/seats';
 
 /** 三种常规噪音（Boss 与精英不占波次预算，见 GDD §4）。 */
@@ -372,6 +373,15 @@ export function nearestSpeakerStack(data: DataRegistry, point: Vec2): Vec2 {
 
 /** 光锥外环位置：锥半径 + [3, 8]m，且至少离开锥 0.5m。 */
 function ringPosition(run: RunState, data: DataRegistry, rng: Rng | null): Vec2 {
+  // 引线：诱饵区更容易被招灾（bait-zone-multiplier 的消费点）。
+  const bait =
+    run.build?.coreCard === 'bait-line'
+      ? 1 + Math.max(0, collectModifiers(run.build, data).get('bait-zone-multiplier') ?? 0)
+      : 1;
+  if (bait > 1 && run.light.lightingZone !== null && rng !== null && rng.next() < 0.3 * bait) {
+    const center = zoneCenterOf(data, run.light.lightingZone);
+    return { x: center.x + rng.range(-1, 1), z: center.z + rng.range(-1, 1) };
+  }
   const min = data.balance.noise.spawnMinDistance;
   const max = data.balance.noise.spawnMaxDistance;
   const picked = rng ? rng.range(min, max) : (min + max) / 2;
@@ -402,4 +412,11 @@ function nextNoiseId(run: RunState): number {
     if (entity.id > max) max = entity.id;
   }
   return max + 1;
+}
+
+/** t139 测试/接线：引线诱饵区的招灾权重（1 = 无卡；2 = 核心卡 +100%）。 */
+export function baitZoneWeight(run: RunState, data: DataRegistry): number {
+  return run.build?.coreCard === 'bait-line'
+    ? 1 + Math.max(0, collectModifiers(run.build, data).get('bait-zone-multiplier') ?? 0)
+    : 1;
 }

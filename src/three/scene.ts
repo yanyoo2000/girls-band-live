@@ -12,7 +12,8 @@
 
 import * as THREE from 'three';
 import { buildMembers, buildStage } from './models';
-import { seatPositionAt } from '../data/seats';
+import { seatPositionAt, ZONE_MARKS } from '../data/seats';
+import type { SeatGridDef, ZoneDef } from '../types/data';
 import type { DataRegistry, PaletteDef, PaletteToken } from '../types/data';
 
 export interface SceneBundle {
@@ -42,18 +43,26 @@ interface LightingPreset {
 }
 
 const LIGHTING_PRESETS: Readonly<Record<LightingState, LightingPreset>> = {
-  warm: { key: 0.38, fill: 0.5, ambient: 0.55, directional: 0.5, lamps: 0.3 },
+  warm: { key: 0.5, fill: 0.62, ambient: 0.78, directional: 0.78, lamps: 0.5 },
   full: { key: 1, fill: 1, ambient: 1, directional: 1, lamps: 1 },
-  blackout: { key: 0.04, fill: 0.08, ambient: 0.2, directional: 0.06, lamps: 0.05 },
+  blackout: { key: 0.06, fill: 0.1, ambient: 0.26, directional: 0.08, lamps: 0.06 },
 };
 
-/** 基准强度（物理光照单位；M5 视觉复调时只改这里）。 */
+/**
+ * 基准强度（物理光照单位）。
+ * v1.0.1 P0-1（t142）：整帧平均亮度 19/255 → 目标 ≥32/255，舞台区 23 → ≥35；
+ * 提亮只走灯光与本文件的发光底，不动 game 数值、不改 HUD 对比度。
+ */
 const BASE_INTENSITY = {
-  key: 32,
-  fill: 8,
-  ambient: 0.65,
-  directional: 0.9,
+  key: 44,
+  fill: 20,
+  ambient: 1.85,
+  directional: 1.8,
 } as const;
+
+/** 背景/雾比场馆黑高一档：整帧平均亮度需要它，同时保留“黑场”观感（不白到刺眼）。 */
+const BACKGROUND_LIFT = 1.42;
+const FOG_DENSITY = 0.0072;
 
 /** 场馆底色（art-direction §3：场馆黑 #0B0D12）。 */
 const INK_FALLBACK = '#0b0d12';
@@ -80,9 +89,10 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
   scene.name = 'gbl-livehouse';
 
   const ink = tokenColor(palette, 'ink', INK_FALLBACK);
-  scene.background = ink.clone();
-  // 场馆空气感：让最后几排自然压到近黑（art-direction §2「上 1/3 压到近黑」）。
-  scene.fog = new THREE.FogExp2(ink.clone(), 0.01);
+  const backdrop = ink.clone().multiplyScalar(BACKGROUND_LIFT);
+  scene.background = backdrop.clone();
+  // 场馆空气感：让最后几排自然压到近黑；密度比 v1.0.0 更低，避免后排被雾吃掉（P0-1）。
+  scene.fog = new THREE.FogExp2(backdrop.clone(), FOG_DENSITY);
 
   const stage = buildStage(data, palette);
   scene.add(stage);
@@ -131,6 +141,11 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
     glowstickTipMaterial.opacity = 0.6 + 0.3 * Math.sin(performance.now() / 420);
   };
   scene.add(glowstick);
+
+  // v1.0.1 P0-4（t142）：四区在世界里的可读标记（区界地纹 + 区中心光柱 + ●▲■◆ 图腾 + 走道十字）。
+  // 全部合并为 1 个顶点色加法网格，只占 1 个 draw call；静默段也保留（art-direction §6）。
+  const zoneMarkers = buildZoneMarkers(data, palette);
+  scene.add(zoneMarkers);
 
   const ambient = new THREE.AmbientLight(0x2a3446, BASE_INTENSITY.ambient);
   ambient.name = 'gbl-ambient';
@@ -214,6 +229,8 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
       scene.remove(stage);
       scene.remove(members);
       scene.remove(glowstick);
+      scene.remove(zoneMarkers);
+      disposeObject3D(zoneMarkers);
       glowstickGeometry.dispose();
       glowstickMaterial.dispose();
       glowstickTipGeometry.dispose();
@@ -256,6 +273,153 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
  */
 export function getActiveSceneBundle(): SceneBundle | null {
   return activeBundle;
+}
+
+/* ==========================================================================
+ * 四区世界标记（v1.0.1 P0-4）
+ * ========================================================================== */
+
+interface MarkerPart {
+  readonly geometry: THREE.BufferGeometry;
+  readonly position: readonly [x: number, y: number, z: number];
+  readonly color: THREE.Color;
+}
+
+/**
+ * 四区标记：区界地纹（贴地细环）、区中心光柱、●▲■◆ 图腾、中央走道十字。
+ * 全部合并成一个顶点色加法网格（1 draw call），颜色取 palette 的 zone token。
+ * 图腾形状与 HUD 四角点、`ZONE_MARKS` 共用同一份语义（art-direction §3）。
+ */
+function buildZoneMarkers(data: DataRegistry, palette: PaletteDef): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'gbl-zone-markers';
+  const parts: MarkerPart[] = [];
+
+  for (const zone of data.zones) {
+    const color = tokenColor(palette, zone.colorToken, '#bfd6e8');
+    const first = seatPositionAt(data.seats, zone.rowRange[0], zone.colRange[0]);
+    const last = seatPositionAt(data.seats, zone.rowRange[1], zone.colRange[1]);
+    const centerX = (first.x + last.x) / 2;
+    const centerZ = (first.z + last.z) / 2;
+    const width = Math.abs(first.x - last.x) + data.seats.spacing.x;
+    const depth = Math.abs(first.z - last.z) + data.seats.spacing.z;
+
+    // 1) 区界地纹：贴地细环（只在走道/排间露出，阅读「这是我这一区」）。
+    const radius = Math.min(width, depth) * 0.44;
+    const ring = new THREE.RingGeometry(radius * 0.94, radius, 40, 1);
+    ring.rotateX(-Math.PI / 2);
+    parts.push({
+      geometry: ring,
+      position: [centerX, 0.05, centerZ],
+      color: color.clone().multiplyScalar(0.5),
+    });
+
+    // 2) 区中心光柱：抬头就能定位这个区在哪（细、暗，不抢画面）。
+    const pole = new THREE.CylinderGeometry(0.025, 0.025, 2.6, 6);
+    parts.push({
+      geometry: pole,
+      position: [centerX, 1.3, centerZ],
+      color: color.clone().multiplyScalar(0.24),
+    });
+
+    // 3) 形状图腾：●▲■◆，悬在 2.95m（远高于人群，不被遮挡）。
+    parts.push({
+      geometry: zoneGlyphGeometry(zone),
+      position: [centerX, 2.95, centerZ],
+      color: color.clone(),
+    });
+  }
+
+  for (const strip of buildAisleCross(data)) parts.push(strip);
+
+  const geometry = mergeMarkerParts(parts);
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    fog: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'gbl-zone-markers-mesh';
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
+  group.add(mesh);
+  return group;
+}
+
+/** 四区图腾形状（与 HUD 的 ●▲■◆ 同义）。 */
+function zoneGlyphGeometry(zone: ZoneDef): THREE.BufferGeometry {
+  switch (ZONE_MARKS[zone.id]) {
+    case 'circle':
+      return new THREE.SphereGeometry(0.2, 10, 8);
+    case 'triangle':
+      return new THREE.ConeGeometry(0.24, 0.44, 3);
+    case 'square':
+      return new THREE.BoxGeometry(0.32, 0.32, 0.32);
+    case 'diamond':
+      return new THREE.OctahedronGeometry(0.24, 0);
+  }
+}
+
+/** 中央走道十字：两条贴地细光带，把观众席切成可读的四象限。 */
+function buildAisleCross(data: DataRegistry): MarkerPart[] {
+  const seats: SeatGridDef = data.seats;
+  const lastRow = Math.max(0, seats.rows - 1);
+  const lastCol = Math.max(0, seats.cols - 1);
+  const colBefore = Math.max(0, Math.min(lastCol, seats.aisleCol - 1));
+  const colAfter = Math.max(0, Math.min(lastCol, seats.aisleCol));
+  const rowBefore = Math.max(0, Math.min(lastRow, seats.aisleRow - 1));
+  const rowAfter = Math.max(0, Math.min(lastRow, seats.aisleRow));
+
+  const xBefore = seatPositionAt(seats, 0, colBefore).x;
+  const xAfter = seatPositionAt(seats, 0, colAfter).x;
+  const zBefore = seatPositionAt(seats, rowBefore, 0).z;
+  const zAfter = seatPositionAt(seats, rowAfter, 0).z;
+
+  const aisleX = (xBefore + xAfter) / 2;
+  const aisleZ = (zBefore + zAfter) / 2;
+  const leftX = seatPositionAt(seats, 0, lastCol).x - 0.45;
+  const rightX = seatPositionAt(seats, 0, 0).x + 0.45;
+  const frontZ = seatPositionAt(seats, 0, 0).z - 0.55;
+  const backZ = seatPositionAt(seats, lastRow, 0).z + 0.55;
+
+  const color = new THREE.Color('#9fb4cc').multiplyScalar(0.34);
+  const alongZ = new THREE.BoxGeometry(0.1, 0.01, backZ - frontZ);
+  const alongX = new THREE.BoxGeometry(rightX - leftX, 0.01, 0.1);
+  return [
+    { geometry: alongZ, position: [aisleX, 0.055, (frontZ + backZ) / 2], color },
+    { geometry: alongX, position: [(leftX + rightX) / 2, 0.055, aisleZ], color },
+  ];
+}
+
+/** 合并几何 + 逐顶点色；源几何在合并后释放（临时几何，不驻留）。 */
+function mergeMarkerParts(parts: readonly MarkerPart[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const colors: number[] = [];
+  for (const part of parts) {
+    const source = part.geometry;
+    const geometry = source.index === null ? source.clone() : source.toNonIndexed();
+    const attribute = geometry.getAttribute('position');
+    for (let index = 0; index < attribute.count; index += 1) {
+      positions.push(
+        attribute.getX(index) + part.position[0],
+        attribute.getY(index) + part.position[1],
+        attribute.getZ(index) + part.position[2],
+      );
+      colors.push(part.color.r, part.color.g, part.color.b);
+    }
+    geometry.dispose();
+    source.dispose();
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  merged.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  merged.computeBoundingSphere();
+  return merged;
 }
 
 /* ==========================================================================

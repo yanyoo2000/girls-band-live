@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { App } from '../src/App';
+import { Hud } from '../src/ui/components/Hud';
+import { attachDomInput } from '../src/ui/input-dom';
+import { createInputBuffer, createInputSampler } from '../src/game/input';
 import { createUiBridge } from '../src/ui/bridge';
+import type { RunUiFlags } from '../src/ui/bridge';
 import { buildDataRegistry } from '../src/data';
 import type { GameEvent, HudSnapshot, RunResult, RunStats } from '../src/types/game';
 import type { SaveDataV1, SaveLoadResult, SavePort } from '../src/types/save';
@@ -33,6 +37,36 @@ const hud: HudSnapshot = {
   holdProgress: 0.5,
   encoreAvailable: true,
   runSeconds: 530,
+  lightMode: 'beam',
+  igniteCooldown: 0.35,
+  soloShield: 0.4,
+  returnLockRemaining: 3,
+  maxLock: 7,
+  lockRemaining: 3,
+  zoneLightRatios: [0.2, 0.5, 0.1, 0.8],
+  zoneOccupancy: [0.4, 0.5, 0.2, 0.6],
+  audienceTrend: -1,
+  audienceLow: false,
+  emptySeats: 300,
+  secondRowEmpty: 20,
+  level: 3,
+  xp: 40,
+  nextLevelXp: 110,
+};
+
+const runFlags: RunUiFlags = {
+  phase: 'playing',
+  emptyHouse: false,
+  interruptPending: false,
+  encoreAvailable: true,
+  canPause: true,
+  cards: [],
+  core: null,
+  picks: 0,
+  maxPicks: 10,
+  converted: 20,
+  burned: 5,
+  covered: 2,
 };
 
 const initialSave: SaveDataV1 = {
@@ -115,6 +149,60 @@ function textOf(markup: string): string {
 }
 
 describe('UI smoke', () => {
+  it('renders v1.0.1 HUD affordances without digits', () => {
+    const earlyHud: HudSnapshot = {
+      ...hud,
+      runSeconds: 5,
+      whiteout: 0,
+      lightCoverage: 0,
+      lightMode: 'spread',
+      soloShield: 0,
+      returnLocked: false,
+      brokenLines: [],
+      audienceTrend: 0,
+      emptySeats: 0,
+      secondRowEmpty: 0,
+      returnLockRemaining: 0,
+      lockRemaining: 0,
+      zoneLightRatios: [0.1, 0.2, 0.1, 0.2],
+    };
+    const tutorialPages = [5, 12, 25].map((runSeconds) =>
+      renderToStaticMarkup(
+        createElement(Hud, {
+          hud: { ...earlyHud, runSeconds },
+          run: runFlags,
+          onPause: () => undefined,
+          onSkipEmptyHouse: () => undefined,
+        }),
+      ),
+    );
+    expect(tutorialPages[0]).toContain('散光养人');
+    expect(tutorialPages[1]).toContain('束光烧人');
+    expect(tutorialPages[2]).toContain('点击点燃');
+    const early = tutorialPages[0] ?? '';
+    expect(early).toContain('IJKL');
+    expect((early.match(/light-state__cell/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(early).toContain('audience-gauge');
+    expect((early.match(/zone-dot__light/g) ?? []).length).toBe(4);
+    expect(textOf(early)).not.toMatch(/[0-9]/);
+
+    const rich = renderToStaticMarkup(
+      createElement(Hud, {
+        hud,
+        run: runFlags,
+        onPause: () => undefined,
+        onSkipEmptyHouse: () => undefined,
+      }),
+    );
+    expect(rich).toContain('lock-callout');
+    expect(rich).toContain('返听锁定');
+    expect(rich).toContain('broken-notice');
+    expect(rich).toContain('靠近队友按 E 插线');
+    expect(rich).toContain('beam-burn');
+    expect(rich).toContain('束光正在烧人');
+    expect(rich).toContain('hud--burning');
+    expect(textOf(rich)).not.toMatch(/[0-9]/);
+  });
   it('boots, navigates and renders every major screen', () => {
     expect(bridge.ui.getSnapshot().route.screen).toBe('boot');
     expect(bridge.ui.getSnapshot().menu.members).toHaveLength(4);
@@ -233,6 +321,9 @@ describe('UI smoke', () => {
     expect(results).toContain('峰值人气');
     expect(results).toContain('中断 · 没有评级');
     expect(results).toContain('再演一场');
+    expect(results).toContain('这一场为什么停在这里');
+    expect((results.match(/results__reason/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(results).toContain('断线 2 次');
     expect(results).toContain('吉他断了 1 次');
     expect(results).toContain('贝斯断了 1 次');
   });
@@ -252,5 +343,60 @@ describe('UI smoke', () => {
     expect(notifications).toBe(0);
     unsubscribe();
     bridge.dispose();
+  });
+
+  it('maps IJKL / Shift / Enter to the light input buffer', async () => {
+    const listeners = new Map<string, Set<(event: Event) => void>>();
+    const fakeWindow = {
+      innerWidth: 1600,
+      innerHeight: 900,
+      addEventListener: (type: string, listener: (event: Event) => void) => {
+        const set = listeners.get(type) ?? new Set();
+        set.add(listener);
+        listeners.set(type, set);
+      },
+      removeEventListener: (type: string, listener: (event: Event) => void) => {
+        listeners.get(type)?.delete(listener);
+      },
+    };
+    Object.defineProperty(globalThis, 'window', { value: fakeWindow, configurable: true });
+    class FakeElement {}
+    Object.defineProperty(globalThis, 'Element', { value: FakeElement, configurable: true });
+    const target = {
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 600 }),
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    } as unknown as HTMLElement;
+    const buffer = createInputBuffer();
+    const sampler = createInputSampler(buffer, 1);
+    const detach = attachDomInput(buffer, { target, ignoreWhenTyping: true });
+    const fire = (type: string, code: string): void => {
+      const event = {
+        code,
+        key: code,
+        repeat: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        shiftKey: false,
+        target: null,
+        preventDefault: () => undefined,
+      } as unknown as KeyboardEvent;
+      for (const listener of listeners.get(type) ?? []) {
+        listener(event);
+      }
+    };
+
+    fire('keydown', 'KeyL');
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    fire('keyup', 'KeyL');
+    fire('keydown', 'ShiftLeft');
+    fire('keydown', 'Enter');
+    const frame = sampler.sample({ toStage: (ndc) => ({ x: ndc.x, z: ndc.z }) });
+    expect(frame.pointerNdc.x).toBeGreaterThan(0);
+    expect(frame.beamHeld).toBe(true);
+    expect(frame.ignitePressed).toBe(true);
+    fire('keyup', 'ShiftLeft');
+    detach();
   });
 });

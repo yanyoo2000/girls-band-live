@@ -55,8 +55,18 @@ const DEFAULT_MIX: AudioMixSettings = { master: 0.8, music: 0.7, sfx: 0.8 };
 
 /** 失焦/隐藏时的总音量衰减（不是 0；保留拍点连续性）。 */
 const HIDDEN_DUCK = 0.12;
-/** 静默段/恢复的淡入淡出时间。 */
-const SILENCE_FADE = 0.03;
+/** 空场保留的低音量（“只剩你还在弹”，不切 0）。 */
+const EMPTY_HOUSE_GAIN = 0.22;
+/** 静默淡出/淡入的小节数（量化到小节，避免 30ms 硬切）。 */
+const SILENCE_FADE_BARS = 0.5;
+/** Boss 静默 8 小节 = 15s；超过 16s 未收到恢复，按空场兜底。 */
+const BOSS_SILENCE_WATCHDOG = 16;
+/** 升级弹窗：setChoir 每 4 拍一次；超过 2.6s 未更新视为冻结，音乐 duck。 */
+const DUCK_AFTER = 2.6;
+const DUCK_GAIN = 0.22;
+const DUCK_FREQ = 700;
+/** 静默段心跳间隔（拍）。 */
+const HEARTBEAT_BEATS = 2;
 /** 调度前瞻（秒）与 tick 间隔（毫秒）。 */
 const LOOKAHEAD = 0.18;
 const TICK_MS = 25;
@@ -120,6 +130,7 @@ interface AudioGraph {
   readonly bassDuck: GainNode;
   readonly segmentBus: GainNode;
   readonly musicBus: GainNode;
+  readonly duckFilter: BiquadFilterNode;
   readonly choirUserGain: GainNode;
   readonly silenceGain: GainNode;
   readonly sfxBus: GainNode;
@@ -155,6 +166,16 @@ interface EngineState {
   mix: AudioMixSettings;
   hidden: boolean;
   silenced: boolean;
+  /** 静默类型：none / 空场（保留 0.22） / Boss（切 0 + 心跳）。 */
+  silenceKind: 'none' | 'empty-house' | 'boss';
+  /** 静默淡出开始时间（量化到下一小节）。 */
+  silenceAt: number;
+  silenceStartedAt: number;
+  /** 下一次心跳的音频时间。 */
+  nextHeartbeat: number;
+  /** 最近一次 setChoir 的音频时间（用于升级弹窗 duck）。 */
+  lastChoirAt: number;
+  ducked: boolean;
   pendingChoir: Readonly<Record<ZoneId, ChoirZoneMix>> | null;
   timer: ReturnType<typeof setInterval> | null;
   nextStepTime: number;
@@ -168,6 +189,12 @@ interface EngineInternal {
   applyMix(mix: AudioMixSettings): void;
   setHidden(hidden: boolean): void;
   readChoirGain(): number;
+  readSilenceGain(): number;
+  readSilenceTarget(): number;
+  readSilenceKind(): 'none' | 'empty-house' | 'boss';
+  readMusicGain(): number;
+  readMasterGain(): number;
+  readDucked(): boolean;
   nodeCount(): number;
 }
 
@@ -203,6 +230,43 @@ function softClipCurve(amount: number): Float32Array<ArrayBuffer> {
 /** 取数据里的数值，缺失时用兜底值。 */
 function pick(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** 每小节秒数（128BPM/4/4 = 1.875s）。 */
+function barSeconds(data: DataRegistry): number {
+  const bpm = pick(data.beatGrid.bpm, pick(data.audio.bpm, 128));
+  const beats = Math.max(1, pick(data.beatGrid.beatsPerBar, 4));
+  return (60 / Math.max(1, bpm)) * beats;
+}
+
+/**
+ * 本次 `setSilenced(true)` 是否落在 Boss「静默」窗口（6:30–6:45，8 小节）。
+ *
+ * store 在空场与 Boss 静默两条路径都调用 `setSilenced(true)`，但只有 Boss 有
+ * 配对的 `setSilenced(false)`；用 run 时间窗口区分，空场走 0.22 低音量。
+ */
+export function isBossSilenceWindow(runTime: number, data: DataRegistry): boolean {
+  const bus = data.balance.boss.phases.find((phase) => phase.phase === 'bus');
+  if (!bus) return false;
+  return runTime >= bus.startSec - 0.25 && runTime < bus.endSec + 0.5;
+}
+
+/** 静默目标增益：Boss 数字零；空场保留 0.22（“只剩你还在弹”）。 */
+export function silenceTargetFor(kind: 'empty-house' | 'boss'): number {
+  return kind === 'boss' ? 0 : EMPTY_HOUSE_GAIN;
+}
+
+/** 下一小节开始的音频时间（量化用）。 */
+export function nextBarTime(startTime: number, now: number, barSec: number): number {
+  if (!(barSec > 0)) return now;
+  const elapsed = Math.max(0, now - startTime);
+  const bars = Math.ceil(elapsed / barSec - 1e-6);
+  return startTime + Math.max(0, bars) * barSec;
+}
+
+/** 升级弹窗 duck 判定：有合唱混音但超过 2.6s 未更新，视为局内冻结。 */
+export function shouldDuckMusic(now: number, lastChoirAt: number, hasChoirMix: boolean): boolean {
+  return hasChoirMix && now - lastChoirAt > DUCK_AFTER;
 }
 
 /** 音乐时钟：玩法时间语义与 `platform/bootstrap` 的降级时钟共用 `createRunMusicClock`。 */
@@ -251,13 +315,17 @@ function buildGraph(state: EngineState, data: DataRegistry): AudioGraph {
   segmentBus.gain.value = 1;
   const musicBus = ctx.createGain();
   musicBus.gain.value = state.mix.music;
+  const duckFilter = ctx.createBiquadFilter();
+  duckFilter.type = 'lowpass';
+  duckFilter.frequency.value = 18000;
+  duckFilter.Q.value = 0.6;
   const silenceGain = ctx.createGain();
   silenceGain.gain.value = state.silenced ? 0 : 1;
   const sfxBus = ctx.createGain();
   sfxBus.gain.value = state.mix.sfx;
   const masterMix = ctx.createGain();
   masterMix.gain.value = 1;
-  nodes.push(segmentBus, musicBus, silenceGain, sfxBus, masterMix);
+  nodes.push(segmentBus, musicBus, duckFilter, silenceGain, sfxBus, masterMix);
 
   const compressor = ctx.createDynamicsCompressor();
   const compressorSpec = data.audio.compressor;
@@ -309,7 +377,8 @@ function buildGraph(state: EngineState, data: DataRegistry): AudioGraph {
     // 已经启动。
   }
 
-  musicBus.connect(silenceGain);
+  musicBus.connect(duckFilter);
+  duckFilter.connect(silenceGain);
   silenceGain.connect(masterMix);
   sfxBus.connect(masterMix);
 
@@ -376,6 +445,7 @@ function buildGraph(state: EngineState, data: DataRegistry): AudioGraph {
     bassDuck,
     segmentBus,
     musicBus,
+    duckFilter,
     choirUserGain,
     silenceGain,
     sfxBus,
@@ -435,7 +505,7 @@ function applyVolumes(state: EngineState): void {
   if (!graph || !ctx) return;
   const at = ctx.currentTime;
   graph.masterGain.gain.setTargetAtTime(state.mix.master * (state.hidden ? HIDDEN_DUCK : 1), at, 0.05);
-  graph.musicBus.gain.setTargetAtTime(state.mix.music, at, 0.05);
+  graph.musicBus.gain.setTargetAtTime(state.mix.music * (state.ducked ? DUCK_GAIN : 1), at, 0.05);
   graph.sfxBus.gain.setTargetAtTime(state.mix.sfx, at, 0.05);
 }
 
@@ -444,18 +514,59 @@ function applySilence(state: EngineState): void {
   const graph = state.graph;
   const ctx = state.ctx;
   if (!graph || !ctx) return;
-  const at = ctx.currentTime;
+  const now = ctx.currentTime;
   const gain = graph.silenceGain.gain;
-  if (!state.silenced && gain.value >= 0.999) return;
-  gain.cancelScheduledValues(at);
+  const barSec = barSeconds(state.data);
+  const fade = Math.max(0.05, SILENCE_FADE_BARS * barSec);
   if (state.silenced) {
-    gain.setValueAtTime(Math.max(0, gain.value), at);
-    gain.linearRampToValueAtTime(0, at + SILENCE_FADE);
+    const at = state.silenceAt > now ? state.silenceAt : now;
+    const target = silenceTargetFor(state.silenceKind === 'boss' ? 'boss' : 'empty-house');
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    if (at > now) gain.setValueAtTime(gain.value, at);
+    gain.linearRampToValueAtTime(target, at + fade);
+    graph.choir.setSilenced(true);
   } else {
-    gain.setValueAtTime(0, at);
-    gain.linearRampToValueAtTime(1, at + SILENCE_FADE);
+    if (gain.value >= 0.999) return;
+    const at = nextBarTime(state.startTime, now, barSec);
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    if (at > now) gain.setValueAtTime(gain.value, at);
+    gain.linearRampToValueAtTime(1, at + fade);
+    graph.choir.setSilenced(false);
   }
-  graph.choir.setSilenced(state.silenced);
+}
+
+/** 升级弹窗/局内冻结：音乐 duck 到 0.22 + 700Hz 低通，不中断调度。 */
+function setDucked(state: EngineState, ducked: boolean): void {
+  if (state.ducked === ducked) return;
+  state.ducked = ducked;
+  const graph = state.graph;
+  const ctx = state.ctx;
+  if (!graph || !ctx) return;
+  const at = ctx.currentTime;
+  graph.musicBus.gain.setTargetAtTime(state.mix.music * (ducked ? DUCK_GAIN : 1), at, 0.15);
+  graph.duckFilter.frequency.setTargetAtTime(ducked ? DUCK_FREQ : 18000, at, 0.15);
+}
+
+/** 静默段心跳：54Hz 低频 thump，走 SFX 总线（不被静默总线切掉）。 */
+function playHeartbeat(state: EngineState, when: number): void {
+  const graph = state.graph;
+  const ctx = state.ctx;
+  if (!graph || !ctx) return;
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(54, when);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.linearRampToValueAtTime(0.18, when + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
+  osc.connect(gain);
+  gain.connect(graph.sfxBus);
+  const release = state.tracker.track([osc, gain], [osc]);
+  osc.onended = release;
+  osc.start(when);
+  osc.stop(when + 0.2);
 }
 
 /** 绝对 16 分步号（用于落后时对齐）。 */
@@ -471,8 +582,11 @@ function scheduleStep(state: EngineState, step: number, when: number): void {
   const bar = Math.floor(step / 16);
   const sub = step % 16;
   const targets = currentTargets(state);
+  const emptyHouseSolo = state.silenced && state.silenceKind === 'empty-house';
   const enabled = new Set<BandLayerId>();
   for (const layer of BAND_LAYERS) {
+    // 空场：「只剩你还在弹」——只留贝斯与主旋律，鼓/和弦/琶音停。
+    if (emptyHouseSolo && layer !== 'bass' && layer !== 'lead') continue;
     if ((targets.get(layer) ?? 0) > 0 && state.userGain[layer] > 0) enabled.add(layer);
   }
   const chord = chordAtBar(bar, state.segment, state.data);
@@ -496,9 +610,36 @@ function createEngineObject(state: EngineState, clock: MusicClock): AudioEngine 
   function startTimer(): void {
     if (state.timer !== null) clearInterval(state.timer);
     state.timer = setInterval(() => {
-      if (!state.ctx || !state.graph || !state.started || state.silenced) return;
+      if (!state.ctx || !state.graph || !state.started) return;
       const now = state.ctx.currentTime;
-      const stepSec = 60 / Math.max(1, clock.bpm) / 4;
+      const barSec = barSeconds(state.data);
+      const beatSec = barSec / 4;
+      if (state.silenced && now >= state.silenceAt) {
+        // 静默段：心跳每 2 拍一次（SFX 总线，−20dB 左右）。
+        if (state.nextHeartbeat < now) {
+          state.nextHeartbeat = now + beatSec * HEARTBEAT_BEATS;
+        }
+        let heartbeatGuard = 0;
+        while (state.nextHeartbeat <= now + LOOKAHEAD && heartbeatGuard < 8) {
+          playHeartbeat(state, Math.max(now, state.nextHeartbeat));
+          state.nextHeartbeat += beatSec * HEARTBEAT_BEATS;
+          heartbeatGuard += 1;
+        }
+        // Boss 静默超过 16s 仍未收到恢复：按空场兜底，不得永久静音。
+        if (state.silenceKind === 'boss' && now - state.silenceStartedAt > BOSS_SILENCE_WATCHDOG) {
+          state.silenceKind = 'empty-house';
+          state.silenceStartedAt = now;
+          state.silenceAt = nextBarTime(state.startTime, now, barSec);
+          applySilence(state);
+        }
+        // Boss 静默：不调度任何音乐；空场：继续调度独奏层（音量由 silenceGain 0.22 控制）。
+        if (state.silenceKind === 'boss') return;
+      }
+      // 升级三选一：setChoir 超过 2.6s 未更新 → 音乐 duck（不中断调度）。
+      if (!state.ducked && shouldDuckMusic(now, state.lastChoirAt, state.pendingChoir !== null)) {
+        setDucked(state, true);
+      }
+      const stepSec = barSec / 4;
       if (state.nextStepTime < now - 0.04) {
         state.nextStepTime = now + 0.02;
         state.stepIndex = stepAt(state, clock, now);
@@ -530,6 +671,11 @@ function createEngineObject(state: EngineState, clock: MusicClock): AudioEngine 
         state.nextStepTime = state.startTime;
         state.stepIndex = 0;
         state.started = true;
+        state.lastChoirAt = ctx.currentTime;
+        if (state.silenced) {
+          state.silenceAt = nextBarTime(state.startTime, ctx.currentTime, barSeconds(state.data));
+          state.nextHeartbeat = state.silenceAt;
+        }
         applyVolumes(state);
         setMusicSegment(state.segment, state.layers, ctx, graph.segmentBus);
         applyLayerGains(state);
@@ -564,6 +710,9 @@ function createEngineObject(state: EngineState, clock: MusicClock): AudioEngine 
       if (state.ctx.state === 'suspended') await state.ctx.resume();
       state.nextStepTime = state.ctx.currentTime + 0.05;
       state.stepIndex = stepAt(state, clock, state.ctx.currentTime);
+      // 暂停期间 setChoir 不会更新；恢复时重置 duck 计时，避免误判为升级弹窗。
+      state.lastChoirAt = state.ctx.currentTime;
+      if (state.ducked) setDucked(state, false);
     },
 
     setSegment(segment: SegmentId): void {
@@ -597,19 +746,35 @@ function createEngineObject(state: EngineState, clock: MusicClock): AudioEngine 
 
     setChoir(mix: Readonly<Record<ZoneId, ChoirZoneMix>>): void {
       state.pendingChoir = mix;
-      // 静默段由下一小节恢复时应用，避免在 0 总线上做无意义的调度。
+      if (state.ctx) state.lastChoirAt = state.ctx.currentTime;
+      if (state.ducked) setDucked(state, false);
     },
 
     setSilenced(silenced: boolean): void {
       if (state.silenced === silenced) return;
       state.silenced = silenced;
-      applySilence(state);
+      const ctx = state.ctx;
+      const now = ctx ? ctx.currentTime : 0;
+      const barSec = barSeconds(state.data);
       if (silenced) {
+        const runTime = ctx ? Math.max(0, now - state.startTime) : 0;
+        state.silenceKind = isBossSilenceWindow(runTime, state.data) ? 'boss' : 'empty-house';
+        state.silenceStartedAt = now;
+        state.silenceAt = ctx ? nextBarTime(state.startTime, now, barSec) : 0;
+        state.nextHeartbeat = state.silenceAt;
+        applySilence(state);
         state.graph?.sfx.play('silence-toggle', null);
-        state.nextStepTime = state.ctx ? state.ctx.currentTime + 0.05 : 0;
-      } else if (state.ctx) {
-        state.nextStepTime = state.ctx.currentTime + 0.05;
-        state.stepIndex = stepAt(state, clock, state.ctx.currentTime);
+        // 调度器继续到 silenceAt 再停，保证淡出是量化到小节的。
+      } else {
+        state.silenceKind = 'none';
+        const restoreAt = ctx ? nextBarTime(state.startTime, now, barSec) : 0;
+        state.silenceAt = restoreAt;
+        state.nextHeartbeat = 0;
+        applySilence(state);
+        if (ctx) {
+          state.nextStepTime = restoreAt + 0.05;
+          state.stepIndex = stepAt(state, clock, restoreAt);
+        }
       }
     },
 
@@ -734,6 +899,12 @@ export async function createAudioEngine(data: DataRegistry): Promise<AudioEngine
     mix: { ...DEFAULT_MIX },
     hidden: false,
     silenced: false,
+    silenceKind: 'none',
+    silenceAt: 0,
+    silenceStartedAt: 0,
+    nextHeartbeat: 0,
+    lastChoirAt: 0,
+    ducked: false,
     pendingChoir: null,
     timer: null,
     nextStepTime: 0,
@@ -758,6 +929,25 @@ export async function createAudioEngine(data: DataRegistry): Promise<AudioEngine
     },
     readChoirGain(): number {
       return state.graph ? readChoirBusGain(state.graph.choir) : 0;
+    },
+    readSilenceGain(): number {
+      return state.graph ? state.graph.silenceGain.gain.value : 0;
+    },
+    readSilenceTarget(): number {
+      if (!state.silenced) return 1;
+      return silenceTargetFor(state.silenceKind === 'boss' ? 'boss' : 'empty-house');
+    },
+    readSilenceKind(): 'none' | 'empty-house' | 'boss' {
+      return state.silenceKind;
+    },
+    readMusicGain(): number {
+      return state.graph ? state.graph.musicBus.gain.value : 0;
+    },
+    readMasterGain(): number {
+      return state.graph ? state.graph.masterGain.gain.value : 0;
+    },
+    readDucked(): boolean {
+      return state.ducked;
     },
     nodeCount(): number {
       return computeNodeCount(state);
@@ -791,3 +981,33 @@ export function readEngineChoirGain(engine: AudioEngine): number {
   return INTERNALS.get(engine)?.readChoirGain() ?? 0;
 }
 
+
+/** 测试/验收辅助：当前静默总线目标（0 = Boss 数字零；0.22 = 空场；1 = 正常）。 */
+export function readEngineSilenceTarget(engine: AudioEngine): number {
+  return INTERNALS.get(engine)?.readSilenceTarget() ?? 1;
+}
+
+/** 测试/验收辅助：当前静默类型。 */
+export function readEngineSilenceKind(engine: AudioEngine): 'none' | 'empty-house' | 'boss' {
+  return INTERNALS.get(engine)?.readSilenceKind() ?? 'none';
+}
+
+/** 测试/验收辅助：当前静默总线实际增益。 */
+export function readEngineSilenceGain(engine: AudioEngine): number {
+  return INTERNALS.get(engine)?.readSilenceGain() ?? 0;
+}
+
+/** 测试/验收辅助：当前音乐总线增益（含升级 duck）。 */
+export function readEngineMusicGain(engine: AudioEngine): number {
+  return INTERNALS.get(engine)?.readMusicGain() ?? 0;
+}
+
+/** 测试/验收辅助：当前主音量（含失焦衰减）。 */
+export function readEngineMasterGain(engine: AudioEngine): number {
+  return INTERNALS.get(engine)?.readMasterGain() ?? 0;
+}
+
+/** 测试/验收辅助：是否处于升级弹窗 duck。 */
+export function readEngineDucked(engine: AudioEngine): boolean {
+  return INTERNALS.get(engine)?.readDucked() ?? false;
+}

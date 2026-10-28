@@ -153,8 +153,10 @@ export function createAudienceInstances(data: DataRegistry): AudienceInstances {
     const isHidden = hidden[index] === 1;
     const isStanding = standing[index] === 1;
     position.set(layout.x[index] ?? 0, (layout.y[index] ?? 0) + CHAIR_SURFACE_Y, layout.z[index] ?? 0);
-    const flat = isHidden ? 0 : 1;
-    scaleVector.set(flat, isHidden ? 0 : isStanding ? 1.28 : 1, flat);
+    // v1.0.1 P0-1：坐姿 1.08、站姿 1.38——比 v1.0.0 高一档，40px 下能压住椅背。
+    const base = isStanding ? 1.38 : 1.08;
+    const flat = isHidden ? 0 : base;
+    scaleVector.set(flat, isHidden ? 0 : base, flat);
     matrix.compose(position, quaternion, scaleVector);
     mesh.setMatrixAt(index, matrix);
   }
@@ -163,16 +165,18 @@ export function createAudienceInstances(data: DataRegistry): AudienceInstances {
     const code = frame.state[index] ?? 0;
     if (code === 1) {
       const heat = frame.heat[index] ?? 0;
-      scratchColor.copy(greyColor).multiplyScalar(0.72 + 0.07 * heat);
+      // v1.0.1 P0-1：未表态的灰比 v1.0.0 提亮约 40%，与更暗的椅背形成「人 vs 椅子」的明暗差。
+      scratchColor.copy(greyColor).multiplyScalar(1.0 + 0.05 * heat);
     } else if (code === 2) {
       const heat = frame.heat[index] ?? 0;
       const tint = clamp(frame.tint[index] ?? 1, 0, 1);
       const zone = frame.zone[index] ?? 0;
       const zoneColor = zoneColors[zone] ?? greyColor;
       scratchColor.copy(greyColor).lerp(zoneColor, tint);
-      scratchColor.multiplyScalar(clamp(0.5 + 0.13 * heat, 0.5, 1.1));
+      scratchColor.multiplyScalar(clamp(0.72 + 0.12 * heat, 0.72, 1.24));
     } else {
-      // 空座 / 已离场 / 被噪音覆盖：黑（art-direction §3「被覆盖与敌人」）。
+      // 空座 / 已离场 / 被噪音覆盖：纯黑剪影。椅背已提亮到 #2b3341，
+      // 因此「被覆盖的人」是一个能被看见的黑形（P0-3），手机灯同时熄灭。
       scratchColor.copy(blackColor);
     }
     colorAttribute.setXYZ(index, scratchColor.r, scratchColor.g, scratchColor.b);
@@ -286,24 +290,89 @@ export function getActiveAudienceInstances(): AudienceInstances | null {
  * 噪音
  * ========================================================================== */
 
-/** 创建噪音实例：3 常规 + 精英 + Boss，共 5 个 InstancedMesh（art-direction §6 L7）。 */
+/**
+ * 每种噪音的视觉参数（v1.0.1 P0-3）：
+ * - `rim`：加法描边壳颜色（暗场里先看见边，再看见黑体）；
+ * - `mark`：贴地光环颜色（噪音在哪一排、离你多远）。
+ */
+const NOISE_RIM_COLORS: Readonly<Record<NoiseKind, number>> = {
+  'floor-noise': 0x6f8ba8,
+  scream: 0xd8ecff,
+  distortion: 0xffb03a,
+  'return-listener': 0xffd08a,
+  silence: 0x8f9fd8,
+};
+
+const NOISE_MARK_COLORS: Readonly<Record<NoiseKind, number>> = {
+  'floor-noise': 0x5f86a8,
+  scream: 0x9fd4ff,
+  distortion: 0xffc766,
+  'return-listener': 0xffe0a0,
+  silence: 0x8fa2e0,
+};
+
+/**
+ * 创建噪音实例：3 常规 + 精英 + Boss。
+ * 每种 kind = 1 个实体网格（纯黑）+ 1 个加法描边壳（BackSide 放大 6%）；
+ * 另加 1 个贴地光环 InstancedMesh 作为「在哪」的定位层。draw call 峰值 5+5+1。
+ */
 export function createNoiseInstances(capacity: number): NoiseInstances {
   const commonCapacity = Math.max(1, Math.floor(capacity));
   const geometries = buildNoiseGeometries();
   const material = new THREE.MeshBasicMaterial({ color: 0x07080a, toneMapped: false });
+  const rimMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.6,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    toneMapped: false,
+    fog: false,
+  });
+  const markGeometry = new THREE.RingGeometry(0.45, 0.62, 20, 1);
+  markGeometry.rotateX(-Math.PI / 2);
+  const markMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    fog: false,
+  });
 
   const group = new THREE.Group();
   group.name = 'gbl-noise';
 
   const meshByKind = {
-    'floor-noise': createNoiseMesh('floor-noise', commonCapacity),
-    scream: createNoiseMesh('scream', commonCapacity),
-    distortion: createNoiseMesh('distortion', commonCapacity),
-    'return-listener': createNoiseMesh('return-listener', ELITE_CAPACITY),
-    silence: createNoiseMesh('silence', BOSS_CAPACITY),
+    'floor-noise': createBody('floor-noise', commonCapacity),
+    scream: createBody('scream', commonCapacity),
+    distortion: createBody('distortion', commonCapacity),
+    'return-listener': createBody('return-listener', ELITE_CAPACITY),
+    silence: createBody('silence', BOSS_CAPACITY),
   } as const satisfies Readonly<Record<NoiseKind, THREE.InstancedMesh>>;
 
-  for (const kind of NOISE_ORDER) group.add(meshByKind[kind]);
+  const rimByKind = {
+    'floor-noise': createRim('floor-noise', commonCapacity),
+    scream: createRim('scream', commonCapacity),
+    distortion: createRim('distortion', commonCapacity),
+    'return-listener': createRim('return-listener', ELITE_CAPACITY),
+    silence: createRim('silence', BOSS_CAPACITY),
+  } as const satisfies Readonly<Record<NoiseKind, THREE.InstancedMesh>>;
+
+  const marks = new THREE.InstancedMesh(markGeometry, markMaterial, commonCapacity + ELITE_CAPACITY + BOSS_CAPACITY);
+  marks.name = 'gbl-noise-marks';
+  marks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  marks.frustumCulled = false;
+  marks.count = 0;
+  marks.visible = false;
+
+  for (const kind of NOISE_ORDER) {
+    group.add(meshByKind[kind]);
+    group.add(rimByKind[kind]);
+  }
+  group.add(marks);
 
   const counts = new Uint16Array(NOISE_ORDER.length);
   const matrix = new THREE.Matrix4();
@@ -311,8 +380,10 @@ export function createNoiseInstances(capacity: number): NoiseInstances {
   const euler = new THREE.Euler();
   const position = new THREE.Vector3();
   const scaleVector = new THREE.Vector3();
+  const scratchColor = new THREE.Color();
+  let markCount = 0;
 
-  function createNoiseMesh(kind: NoiseKind, count: number): THREE.InstancedMesh {
+  function createBody(kind: NoiseKind, count: number): THREE.InstancedMesh {
     const mesh = new THREE.InstancedMesh(geometries[kind], material, count);
     mesh.name = `gbl-noise-${kind}`;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -322,12 +393,26 @@ export function createNoiseInstances(capacity: number): NoiseInstances {
     return mesh;
   }
 
+  function createRim(kind: NoiseKind, count: number): THREE.InstancedMesh {
+    const rim = new THREE.InstancedMesh(geometries[kind], rimMaterial, count);
+    rim.name = `gbl-noise-rim-${kind}`;
+    rim.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    rim.frustumCulled = false;
+    rim.count = 0;
+    rim.visible = false;
+    const colors = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    colors.setUsage(THREE.DynamicDrawUsage);
+    rim.instanceColor = colors;
+    return rim;
+  }
+
   const noise: NoiseInstances = {
     mesh: meshByKind['floor-noise'],
     group,
 
     apply(frame: NoiseFrame, settings: DisplaySettings): void {
       counts.fill(0);
+      markCount = 0;
       const limit = settings.quality === 'low' ? Math.min(commonCapacity, LOW_QUALITY_NOISE) : commonCapacity;
       const total = clamp(Math.floor(frame.count), 0, commonCapacity);
       const stride = 2;
@@ -337,9 +422,9 @@ export function createNoiseInstances(capacity: number): NoiseInstances {
         const kindCode = frame.kind[index] ?? 0;
         const kind = NOISE_ORDER[kindCode];
         if (kind === undefined) continue;
-        const target = meshByKind[kind];
         const slot = counts[kindCode] ?? 0;
-        const capacityForKind = kind === 'return-listener' ? ELITE_CAPACITY : kind === 'silence' ? BOSS_CAPACITY : limit;
+        const capacityForKind =
+          kind === 'return-listener' ? ELITE_CAPACITY : kind === 'silence' ? BOSS_CAPACITY : limit;
         if (slot >= capacityForKind) continue;
 
         const x = positions[index * stride] ?? 0;
@@ -352,30 +437,67 @@ export function createNoiseInstances(capacity: number): NoiseInstances {
         quaternion.setFromEuler(euler);
         scaleVector.set(scale, scale, scale);
         matrix.compose(position, quaternion, scaleVector);
-        target.setMatrixAt(slot, matrix);
+        meshByKind[kind].setMatrixAt(slot, matrix);
+
+        // 描边壳：同几何放大 6% + BackSide，暗场里先读到轮廓。
+        scaleVector.set(scale * 1.06, scale * 1.06, scale * 1.06);
+        matrix.compose(position, quaternion, scaleVector);
+        rimByKind[kind].setMatrixAt(slot, matrix);
+        scratchColor.setHex(NOISE_RIM_COLORS[kind]);
+        rimByKind[kind].setColorAt(slot, scratchColor);
+
+        // 悬空光环：噪音本体贴地、在暗场里只有几像素；标记抬到 2.3m 才读得到「在哪」。
+        position.set(x, 2.3 + scale * 0.25, z);
+        scaleVector.set(scale, 1, scale);
+        matrix.compose(position, quaternion, scaleVector);
+        marks.setMatrixAt(markCount, matrix);
+        scratchColor.setHex(NOISE_MARK_COLORS[kind]);
+        marks.setColorAt(markCount, scratchColor);
+        markCount += 1;
+
         counts[kindCode] = slot + 1;
       }
 
       for (let code = 0; code < NOISE_ORDER.length; code += 1) {
         const kind = NOISE_ORDER[code];
         if (kind === undefined) continue;
-        const mesh = meshByKind[kind];
         const count = counts[code] ?? 0;
-        mesh.count = count;
-        mesh.visible = count > 0;
-        if (count > 0) mesh.instanceMatrix.needsUpdate = true;
+        const body = meshByKind[kind];
+        body.count = count;
+        body.visible = count > 0;
+        if (count > 0) body.instanceMatrix.needsUpdate = true;
+        const rim = rimByKind[kind];
+        rim.count = count;
+        rim.visible = count > 0;
+        if (count > 0) {
+          rim.instanceMatrix.needsUpdate = true;
+          if (rim.instanceColor !== null) rim.instanceColor.needsUpdate = true;
+        }
+      }
+
+      marks.count = markCount;
+      marks.visible = markCount > 0;
+      if (markCount > 0) {
+        marks.instanceMatrix.needsUpdate = true;
+        if (marks.instanceColor !== null) marks.instanceColor.needsUpdate = true;
       }
     },
 
     dispose(): void {
       group.removeFromParent();
       for (const kind of NOISE_ORDER) {
-        const mesh = meshByKind[kind];
-        mesh.removeFromParent();
-        mesh.dispose();
+        meshByKind[kind].removeFromParent();
+        meshByKind[kind].dispose();
+        rimByKind[kind].removeFromParent();
+        rimByKind[kind].dispose();
       }
+      marks.removeFromParent();
+      marks.dispose();
       for (const kind of NOISE_ORDER) geometries[kind].dispose();
       material.dispose();
+      rimMaterial.dispose();
+      markGeometry.dispose();
+      markMaterial.dispose();
       group.clear();
       if (activeNoise === noise) activeNoise = null;
     },
@@ -524,23 +646,61 @@ function computeSeatLayout(seats: SeatGridDef): SeatLayout {
 }
 
 /**
- * 观众材质：无光照（自发光实例），叠一层「白光遮罩」uniform（tech-spec §14.3 F8）。
- * uniform 句柄挂在 `material.userData.whiteout` 上，renderer 每帧写入 0..0.85。
+ * 观众材质：无光照（自发光实例）+ 两个 uniform 通道。
+ * - `uWhiteout`（tech-spec §14.3 F8）：白光遮罩，只混 ≤30% 白，完整遮罩由 React DOM 负责；
+ * - `uLightPos/uLightRadius/uLightBoost/uLightColor`（v1.0.1 P0-2）：世界里的光池，
+ *   被光罩住的实例整体提亮/加暖——这是「光落在人身上」的唯一可读来源，
+ *   因为 `AudienceFrame` 不携带逐座是否被照亮，只有 converged/heat 状态。
  */
 function createAudienceMaterial(): THREE.MeshBasicMaterial {
   const material = new THREE.MeshBasicMaterial({ toneMapped: false });
   const whiteout = { value: 0 };
+  const lightPool = {
+    position: { value: new THREE.Vector2(0, 8) },
+    radius: { value: 4.2 },
+    boost: { value: 0.55 },
+    color: { value: new THREE.Color('#fff1d6') },
+  };
   material.userData['whiteout'] = whiteout;
-  material.customProgramCacheKey = (): string => 'gbl-audience-whiteout';
+  material.userData['lightPool'] = lightPool;
+  material.customProgramCacheKey = (): string => 'gbl-audience-v101';
   material.onBeforeCompile = (shader): void => {
     shader.uniforms['uWhiteout'] = whiteout;
+    shader.uniforms['uLightPos'] = lightPool.position;
+    shader.uniforms['uLightRadius'] = lightPool.radius;
+    shader.uniforms['uLightBoost'] = lightPool.boost;
+    shader.uniforms['uLightColor'] = lightPool.color;
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        'void main() {',
+        'uniform vec2 uLightPos;\nuniform float uLightRadius;\nvarying float vLightPool;\nvoid main() {',
+      )
+      .replace(
+        '#include <project_vertex>',
+        [
+          '#include <project_vertex>',
+          '\tvec4 gblInstanceWorld = modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );',
+          '\tfloat gblLightDistance = distance( gblInstanceWorld.xz, uLightPos );',
+          '\tvLightPool = 1.0 - smoothstep( uLightRadius * 0.45, uLightRadius * 1.08, gblLightDistance );',
+        ].join('\n'),
+      );
+
     shader.fragmentShader = shader.fragmentShader
-      .replace('void main() {', 'uniform float uWhiteout;\nvoid main() {')
+      .replace(
+        'void main() {',
+        'uniform float uWhiteout;\nuniform float uLightBoost;\nuniform vec3 uLightColor;\nvarying float vLightPool;\nvoid main() {',
+      )
       .replace(
         '#include <dithering_fragment>',
-        // 只做 ≤30% 去饱和：F8 的完整白光遮罩由 React 的 #whiteout 径向渐变负责，
-        // 渲染层若按 0.85 全量洗白，会把「三色可读性」这个 P0 吞掉（art-direction §12）。
-        '#include <dithering_fragment>\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( 1.0 ), uWhiteout * 0.35 );',
+        [
+          '#include <dithering_fragment>',
+          '\tfloat gblLift = clamp( vLightPool * uLightBoost, 0.0, 1.0 );',
+          '\tgl_FragColor.rgb = mix( gl_FragColor.rgb, uLightColor, gblLift * 0.38 );',
+          '\tgl_FragColor.rgb += uLightColor * gblLift * 0.2;',
+          '\tgl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( 1.0 ), uWhiteout * 0.3 );',
+          '\tgl_FragColor.rgb = min( gl_FragColor.rgb, vec3( 1.0 ) );',
+        ].join('\n'),
       );
   };
   return material;

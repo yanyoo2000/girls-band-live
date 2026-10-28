@@ -1022,6 +1022,12 @@ export function createProceduralAssets(): ProceduralAssets;
 - **读**：`useSyncExternalStore(bridge.hud.subscribe, bridge.hud.getSnapshot)`；`getSnapshot` 必须返回**同一引用**直到内容变化（否则 React 19 会无限重渲染）。
 - **写**：只通过 `bridge.dispatch(command)`；UI 不直接调 store 的 `tick`/内部函数。
 - **HUD 快照结构**见 `src/types/game.ts` 的 `HudSnapshot`：局内 0 个数字（覆盖比例、四区热度、危险条、节拍相位、段位点、状态图标）。
+- **t139 追加（t143 只读这些字段，不改 types）**：
+  - `HudSnapshot` / `RunUiFlags`：`lightMode`、`igniteCooldown`、`soloShield`、`lockRemaining`/`returnLockRemaining`、`maxLock`/`maxLockSeconds`、`level`/`xp`/`nextLevelXp`、`zoneOccupancy`/`zoneLightRatios`、`audienceTrend`、`audienceLow`、`emptySeats`/`secondRowEmpty`。字段均为可选，旧快照兼容。
+  - `RunResult.lineBreaks?: Record<InstrumentLineId, number>`（store 在 finishRun 填；bridge 另维护事件计数）。
+  - `LevelUpView.level/xp/nextLevelXp?`；`RunUiFlags.levelUpEnabled/canRestart?`（空场后 levelUpEnabled=false）。
+  - `RunState.level/xp/nextLevelXp?`（progression 在升级时写）。
+  - **defer**：`AudienceFrame.lit: Float32Array`（逐座被照 0..1）本轮未加；t143 可用 `HudSnapshot.zoneLightRatios` + `lightCoverage` 近似。
 
 ### 6.2 HUD ≤10Hz 的具体实现
 
@@ -1661,3 +1667,16 @@ export interface RenderStats {
 | 仅桌面、无触屏内容 | 是（全文） |
 
 *本文件是 M5 实现的唯一技术依据；与 `docs/agent-handbook.md` 冲突时以本文件为准。*
+
+---
+
+## 19. v1.0.1 集成口径（t144）
+
+- **版本/产物**：`package.json` 1.0.1；单文件 `dist/girls-band-live.html` = 根 `index.html` = 1,084,885 B（1,059.5 KiB），sha256 `25422f523607…`（两次构建一致）。
+- **Gameplay（t139）**：11+ modifier 接线（第二排/合唱墙/衰减/盾/独奏/引线/第一排/留人/encore-retain）；`run.stats` 每拍回写；返听 `lockOrigin` + 位移≥8m/7s 兜底；安可归零窗口；`LightState.soloShield/selfCooldown`；UI 契约字段见 §6.1。
+- **Audio（t140）**：空场 `setSilenced(true)` 非 Boss 窗口 → 0.22 独奏 + 心跳；Boss 静默 16s 兜底；静默量化到下一小节、0.5 小节淡入淡出；合唱 `CHOIR_VOICE_GAIN=0.38` + 1.4kHz presence；升级 duck 2.6s。
+- **Visual（t142）**：`RenderSnapshot.light.intensity` 不再当常亮系数；地面光池 + 观众世界光池；束光红边；曝光/亮度调整。实测平均亮度 40.83/255、束光观众区像素差 14.61%。
+- **UI（t143）**：序曲三步教学；散/束/回三格 + 护盾/冷却/锁定；0 数字人气读数（区亮灯比例/趋势/空位剪影/audienceLow）；IJKL/小键盘/Shift+方向键/Shift/Enter 键盘等价；Tab 构筑；空场暂停/重开；blur/visibilitychange 自动暂停；ViewportGate <1024×640 可继续/回菜单/Esc；HUD ≥11px、text-dim 7.64:1。
+- **冲突处理**：`tests/hud.test.ts` 的 `emptyHud().whiteout` 旧断言 0.85 → 0（与新口径一致）；t139 新增字段均为可选，旧 fixtures 不破；t143 `canPause` 扩到 empty-house/finale-hold，`levelUpEnabled` 空场为 false。
+- **defer**：峰值>300 / A-S 可达性、底噪 12HP 的 2.5s 唱化、纯键盘 9:30 完整局、人耳音频、性能/Firefox 人测、`AudienceFrame.lit` 逐座数组。
+

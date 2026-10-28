@@ -53,7 +53,8 @@ describe('HudSnapshot 形状', () => {
     const harness = createHarness();
     const hud = harness.store.getHud();
     expect(hud.zones).toHaveLength(4);
-    expect(hud.whiteout).toBeCloseTo(0.85, 10);
+    // t139：run=null 的空快照不再闪 0.85 满白（开局白光 0）。
+    expect(hud.whiteout).toBe(0);
     expect(hud.runSeconds).toBe(0);
     harness.dispose();
   });

@@ -265,6 +265,9 @@ export function addExperience(run: RunState, amount: number, rng: Rng): CardOffe
   if (cards.length === 0) return null; // 没有数据可用时不消耗等级，等下一次带 data 的调用补发
 
   ledger.level += 1;
+  run.level = ledger.level;
+  run.xp = ledger.xp;
+  run.nextLevelXp = LEVEL_THRESHOLDS[ledger.level] ?? 0;
   return { offerId: offerIdFor(build), cards };
 }
 

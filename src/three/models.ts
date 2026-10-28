@@ -63,6 +63,11 @@ function createVertexColorMaterial(): THREE.MeshStandardMaterial {
     roughness: 0.85,
     metalness: 0.04,
     flatShading: true,
+    // v1.0.1 P0-1（t142）：所有顶点色表面加一层极低自发光底。
+    // 任何灯光态下场馆/座椅/乐手都不会掉到纯黑（试玩实测整帧 19/255、舞台 23/255）；
+    // 颜色仍由顶点色决定，不引入第四种高饱和色，也不影响 HUD 对比度。
+    emissive: new THREE.Color('#171d29'),
+    emissiveIntensity: 1,
   });
 }
 
@@ -255,7 +260,9 @@ export function buildStage(data: DataRegistry, palette: PaletteDef): THREE.Group
   venueMesh.name = 'stage-venue';
   group.add(venueMesh);
 
-  const seats = buildSeats(data, venueMaterial, ink);
+  // 椅背比场馆黑高一档但明显低于观众（#1b2029）：
+  // 空场时能读出 24×32 的座位网格，同时让「人」在椅背前是更亮的形（t142 P0-1/P0-3）。
+  const seats = buildSeats(data, venueMaterial, new THREE.Color('#1b2029'));
   group.add(seats);
 
   const lamps = buildLampFixtures(warm, cool, amber);

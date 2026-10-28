@@ -1,8 +1,8 @@
 /** 结算：后台清单、真实数据、评级、四句成员短句（允许数字）。 */
 
 import type { ReactElement } from 'react';
-import type { EndingKind } from '../../types/game';
-import type { ResultView } from '../../types/ui';
+import type { EndingKind, InstrumentLineId } from '../../types/game';
+import type { ResultView, UiBridge } from '../../types/ui';
 import { Button } from '../components/Button';
 import { ScreenShell } from '../components/ScreenShell';
 import { Stamp } from '../components/Stamp';
@@ -15,9 +15,11 @@ import {
   emptyCopyContext,
   formatTime,
 } from '../copy';
+import { useRunFlags } from '../hooks';
 
 export interface ResultsScreenProps {
   readonly view: ResultView;
+  readonly bridge: UiBridge;
   readonly onRestart: () => void;
   readonly onMenu: () => void;
 }
@@ -36,12 +38,45 @@ function endingLabel(ending: EndingKind): string {
   }
 }
 
+const LINE_LABELS: Readonly<Record<InstrumentLineId, string>> = {
+  guitar: '吉他',
+  bass: '贝斯',
+  drums: '鼓',
+};
+
 /** 散场之后。 */
-export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): ReactElement {
+export function ResultsScreen({ view, bridge, onRestart, onMenu }: ResultsScreenProps): ReactElement {
+  const run = useRunFlags(bridge);
   const ctx = emptyCopyContext();
   const maxZone = Math.max(1, ...ZONE_ORDER.map((zone) => view.zoneCounts[zone] ?? 0));
   const ratio = view.stats.converted + view.stats.burned;
   const convertShare = ratio === 0 ? 0 : Math.round((view.stats.converted / ratio) * 100);
+  const lineBreaks = run.lineBreaks;
+  const breakTotal = lineBreaks === undefined
+    ? 0
+    : (lineBreaks.guitar ?? 0) + (lineBreaks.bass ?? 0) + (lineBreaks.drums ?? 0);
+  const breakText = lineBreaks === undefined
+    ? ''
+    : (Object.entries(lineBreaks) as readonly [InstrumentLineId, number][])
+        .filter(([, count]) => count > 0)
+        .map(([line, count]) => `${LINE_LABELS[line]} ${count} 次`)
+        .join('、');
+  const emptiestZone = ZONE_ORDER.reduce(
+    (best, zone) => ((view.zoneCounts[zone] ?? 0) < (view.zoneCounts[best] ?? 0) ? zone : best),
+    ZONE_ORDER[0] ?? 'front-left',
+  );
+  const emptiestCount = view.zoneCounts[emptiestZone] ?? 0;
+  const emptiestText =
+    emptiestCount === 0 && maxZone === 0
+      ? '四区都已经空了。'
+      : `${ZONE_LABELS[emptiestZone]}只剩 ${emptiestCount} 人，是四区里最少的。`;
+  const reasons: readonly string[] = [
+    `人气：峰值 ${view.stats.peakAudience}，终场 ${view.stats.finalAudience}；空位 ${view.emptySeats}，第二排空位 ${view.secondRowEmpty}。`,
+    `空得最快：${emptiestText}`,
+    `消耗：被覆盖 ${view.stats.covered} 人次，离场 ${view.stats.leftVenue} 人${
+      breakTotal > 0 ? `；断线 ${breakTotal} 次（${breakText}）` : ''
+    }。`,
+  ];
 
   return (
     <ScreenShell
@@ -86,6 +121,21 @@ export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): 
             <Stamp grade={view.grade} />
           )}
         </section>
+
+        {view.ending === 'complete' ? null : (
+          <section className="results__why" aria-labelledby="results-why-title">
+            <h2 id="results-why-title" className="results__section-title">
+              这一场为什么停在这里
+            </h2>
+            <ol className="results__reasons">
+              {reasons.map((reason) => (
+                <li key={reason} className="results__reason">
+                  {reason}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
 
         <div className="results__columns">
           <section className="results__data" aria-labelledby="results-data-title">

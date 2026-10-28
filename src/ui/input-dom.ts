@@ -30,6 +30,29 @@ const KEY_MAP: Readonly<Record<string, InputKey>> = {
   KeyE: 'interact',
 };
 
+/** 键盘移光：IJKL 与小键盘 8/4/6/2（t143 无障碍等价）。 */
+const LIGHT_KEY_MAP: Readonly<Record<string, { readonly x: number; readonly z: number }>> = {
+  KeyI: { x: 0, z: 1 },
+  KeyK: { x: 0, z: -1 },
+  KeyJ: { x: -1, z: 0 },
+  KeyL: { x: 1, z: 0 },
+  Numpad8: { x: 0, z: 1 },
+  Numpad2: { x: 0, z: -1 },
+  Numpad4: { x: -1, z: 0 },
+  Numpad6: { x: 1, z: 0 },
+};
+
+/** Shift + 方向键也移光；不按 Shift 时方向键仍走位。 */
+const ARROW_LIGHT_CODES: Readonly<Record<string, { readonly x: number; readonly z: number }>> = {
+  ArrowUp: { x: 0, z: 1 },
+  ArrowDown: { x: 0, z: -1 },
+  ArrowLeft: { x: -1, z: 0 },
+  ArrowRight: { x: 1, z: 0 },
+};
+
+const LIGHT_MOVE_SPEED = 1.05; // NDC / 秒；1280 宽下约 1.25 秒横穿半个屏幕
+const LIGHT_TICK_MS = 50;
+
 const MOVE_KEYS: readonly InputKey[] = [
   'move-up',
   'move-down',
@@ -65,9 +88,57 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
   let holdStartedAt: number | null = null;
   let holdTimer: ReturnType<typeof setInterval> | null = null;
   let holdResetTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 键盘移光使用的虚拟 NDC；指针移动会覆盖它。 */
+  let virtualNdc = { x: 0, z: 0 };
+  const heldLightKeys = new Set<string>();
+  let lightTimer: ReturnType<typeof setInterval> | null = null;
 
   const setKey = (key: InputKey, down: boolean): void => {
     buffer.setKey(key, down);
+  };
+
+  const pushVirtualNdc = (): void => {
+    buffer.setPointerNdc({ x: virtualNdc.x, z: virtualNdc.z });
+  };
+
+  const stepLight = (): void => {
+    if (heldLightKeys.size === 0) {
+      return;
+    }
+    const dt = LIGHT_TICK_MS / 1000;
+    let dx = 0;
+    let dz = 0;
+    for (const code of heldLightKeys) {
+      const direction = LIGHT_KEY_MAP[code] ?? ARROW_LIGHT_CODES[code];
+      if (direction !== undefined) {
+        dx += direction.x;
+        dz += direction.z;
+      }
+    }
+    virtualNdc = {
+      x: Math.max(-1, Math.min(1, virtualNdc.x + dx * LIGHT_MOVE_SPEED * dt)),
+      z: Math.max(-1, Math.min(1, virtualNdc.z + dz * LIGHT_MOVE_SPEED * dt)),
+    };
+    pushVirtualNdc();
+  };
+
+  const startLightLoop = (): void => {
+    if (lightTimer !== null) {
+      return;
+    }
+    lightTimer = setInterval(stepLight, LIGHT_TICK_MS);
+  };
+
+  const stopLightLoop = (): void => {
+    if (lightTimer !== null) {
+      clearInterval(lightTimer);
+      lightTimer = null;
+    }
+  };
+
+  const clearLightKeys = (): void => {
+    heldLightKeys.clear();
+    stopLightLoop();
   };
 
   const updateHold = (): void => {
@@ -114,6 +185,7 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
       setKey(key, false);
     }
     stopHold();
+    clearLightKeys();
     buffer.setKey('beam', false);
     buffer.setHoldSeconds(0);
   };
@@ -125,14 +197,17 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
     }
     const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
-    // 契约里的 Vec2 是 XZ 平面（x, z）；NDC 的 y 存到 z，由 PointerProjector 解释。
-    buffer.setPointerNdc({
+    virtualNdc = {
       x: Math.max(-1, Math.min(1, x)),
       z: Math.max(-1, Math.min(1, y)),
-    });
+    };
+    // 契约里的 Vec2 是 XZ 平面（x, z）；NDC 的 y 存到 z，由 PointerProjector 解释。
+    pushVirtualNdc();
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    // 鼠标一动就交还控制权，避免键盘 interval 与指针抢同一个 NDC。
+    clearLightKeys();
     updatePointer(event);
   };
 
@@ -168,8 +243,32 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
     if (ignoreWhenTyping && isTypingTarget(event.target)) {
       return;
     }
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      buffer.setKey('beam', true);
+      return;
+    }
     // 焦点在按钮上时，Space/Enter 属于「激活」，不抢。
     if ((event.code === 'Space' || event.code === 'Enter') && isInteractiveTarget(event.target)) {
+      return;
+    }
+
+    // IJKL / 小键盘 / Shift+方向键：移动光（t143 键盘等价）。
+    const lightDirection =
+      LIGHT_KEY_MAP[event.code] ??
+      (event.shiftKey ? ARROW_LIGHT_CODES[event.code] : undefined);
+    if (lightDirection !== undefined) {
+      event.preventDefault();
+      if (!heldLightKeys.has(event.code)) {
+        heldLightKeys.add(event.code);
+        startLightLoop();
+        stepLight();
+      }
+      return;
+    }
+
+    if (event.code === 'Enter') {
+      event.preventDefault();
+      buffer.press('ignite');
       return;
     }
 
@@ -189,6 +288,17 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
   };
 
   const onKeyUp = (event: KeyboardEvent): void => {
+    if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      buffer.setKey('beam', false);
+      return;
+    }
+    if (heldLightKeys.has(event.code)) {
+      heldLightKeys.delete(event.code);
+      if (heldLightKeys.size === 0) {
+        stopLightLoop();
+      }
+      return;
+    }
     const mapped = KEY_MAP[event.code];
     if (mapped !== undefined) {
       setKey(mapped, false);
@@ -237,5 +347,6 @@ export function attachDomInput(buffer: InputBuffer, options: DomInputOptions): (
       clearTimeout(holdResetTimer);
       holdResetTimer = null;
     }
+    clearLightKeys();
   };
 }

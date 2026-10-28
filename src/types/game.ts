@@ -216,6 +216,12 @@ export interface LightState {
   sweepBonusCharges: number;
   /** 当前被照亮的区（无则 null）。 */
   lightingZone: ZoneId | null;
+  /** 回照（独奏）护盾当前值；0 表示无护盾/非独奏。 */
+  soloShield: number;
+  /** 本次独奏剩余秒数（self-duration 延长）。 */
+  soloRemaining: Seconds;
+  /** 独奏结束后的冷却（self-cooldown，代价越大越久）。 */
+  selfCooldown: Seconds;
 }
 
 /** 玩家（主唱）本体。 */
@@ -314,6 +320,8 @@ export interface ReturnListenerState {
   anchor: Vec2 | null;
   /** 是否咬住光。 */
   locked: boolean;
+  /** 锁定瞬间的光心（用于“累计位移”解锁判定）。 */
+  lockOrigin: Vec2 | null;
   lockSeconds: Seconds;
   hp: number;
   maxHp: number;
@@ -447,6 +455,8 @@ export interface RunResult {
   readonly emptySeats: number;
   /** 第二排空位数（结算叙事用）。 */
   readonly secondRowEmpty: number;
+  /** 三条线的断线次数（t139；结算败因/后台文案用）。 */
+  readonly lineBreaks?: Readonly<Record<InstrumentLineId, number>>;
   readonly failure: FailureCard | null;
 }
 
@@ -462,6 +472,10 @@ export interface RunState {
   zones: Readonly<Record<ZoneId, ZoneState>>;
   audience: AudienceFrame;
   noises: NoiseEntity[];
+  /** 当前等级 / 累计 XP / 下一级阈值（t143 进度 UI；可选）。 */
+  level?: number;
+  xp?: number;
+  nextLevelXp?: number;
   returnListener: ReturnListenerState;
   boss: BossState;
   lines: Readonly<Record<InstrumentLineId, LineState>>;
@@ -707,6 +721,33 @@ export interface HudSnapshot {
   readonly encoreAvailable: boolean;
   /** 供测试断言的时间（不展示）。 */
   readonly runSeconds: Seconds;
+  /** 光形态（三形态 HUD/护盾用；可选，兼容旧快照）。 */
+  readonly lightMode?: LightMode;
+  /** 点燃冷却归一化 0..1（1=刚点燃，0=就绪）。 */
+  readonly igniteCooldown?: Ratio;
+  /** 回照护盾 0..1（0=无/非独奏）。 */
+  readonly soloShield?: Ratio;
+  /** 返听锁定剩余秒数（HUD 画倒计时条，不显示数字）。 */
+  readonly returnLockRemaining?: Seconds;
+  /** 返听锁定上限（与 returnLockRemaining 配对，t143 画进度）。 */
+  readonly maxLockSeconds?: Seconds;
+  /** t143 别名：lockRemaining / maxLock。 */
+  readonly lockRemaining?: Seconds;
+  readonly maxLock?: Seconds;
+  /** 当前等级 / 本局累计 XP / 下一级阈值（0=满级）。 */
+  readonly level?: number;
+  readonly xp?: number;
+  readonly nextLevelXp?: number;
+  /** 四区占用率（0..1，按区容量）。 */
+  readonly zoneOccupancy?: readonly [Ratio, Ratio, Ratio, Ratio];
+  /** 四区亮灯比例（占该区席位）。 */
+  readonly zoneLightRatios?: readonly [Ratio, Ratio, Ratio, Ratio];
+  /** 10s 人气趋势：-1 下降 / 0 持平 / 1 上升。 */
+  readonly audienceTrend?: -1 | 0 | 1;
+  /** 崩盘预警：present < peak×0.15 且持续。 */
+  readonly audienceLow?: boolean;  /** 空位/第二排空位（剪影读数用，不在 HUD 显示数字）。 */
+  readonly emptySeats?: number;
+  readonly secondRowEmpty?: number;
 }
 
 /* ==========================================================================

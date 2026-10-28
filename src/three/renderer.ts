@@ -144,6 +144,28 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
   pool.renderOrder = 1;
   lightRig.add(pool);
 
+  // 光斑边缘：抬到人群上方的一枚「光池盘」——中心半透明、边缘更亮，
+  // 让「我的光现在照到哪里」有一个硬边界（P0-2），而不是一圈悬空的线。
+  const poolEdgeGeometry = createLightDiscGeometry();
+  const poolEdgeMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    fog: false,
+  });
+  const poolEdge = new THREE.Mesh(poolEdgeGeometry, poolEdgeMaterial);
+  poolEdge.name = 'gbl-light-pool-edge';
+  // 抬到人群头顶高度（1.42m）：不被座椅/观众遮挡，成为「光斑落在哪」的硬边界。
+  poolEdge.position.y = 1.42;
+  poolEdge.frustumCulled = false;
+  poolEdge.renderOrder = 1;
+  lightRig.add(poolEdge);
+
   const shieldMaterial = new THREE.MeshBasicMaterial({
     color: 0x35e0d0,
     transparent: true,
@@ -183,6 +205,7 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
   let lastLightRadius = 4.2;
   let beamAlpha = 0;
   let poolAlpha = 0;
+  let poolEdgeAlpha = 0;
   let shieldAlpha = 0;
   let disposed = false;
   let contextLost = false;
@@ -320,32 +343,68 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
     lastLightRadius = clamp(light.radius, 0.5, 12);
     lightRig.position.set(light.position.x, 0, light.position.z);
 
-    const contrast = settings.highContrast ? 1.15 : 1;
+    const contrast = settings.highContrast ? 1.2 : 1;
     const flashValue = settings.lowFlash ? Math.min(flash, 0.6) : flash;
     const pulse = settings.reducedMotion ? 0 : clamp(light.pulse, 0, 1);
     const visibility = clamp(light.visibility, 0, 1);
-    const brightness =
-      clamp(light.intensity, 0, 2) * (1 + pulse * 0.8 + flashValue * 1.8) * contrast * visibility;
+    // v1.0.1 P0-2 根因修复：`snapshot.light.intensity` 是「点燃脉冲」（0.3s 衰减到 0），
+    // 不是常亮亮度。v1.0.0 把它当常亮系数 → 除点燃瞬间外光池/光锥 alpha 恒为 0，
+    // 实测束光前后像素差只有 0.17%。这里改为常亮底 + 脉冲/白闪增益。
+    const brightness = (0.95 + pulse * 1.1 + flashValue * 1.6) * contrast * visibility;
 
-    beam.scale.set(lastLightRadius, 1, lastLightRadius);
-    pool.scale.set(lastLightRadius, 1, lastLightRadius);
+    const selfMode = light.mode === 'self';
+    const beamMode = light.mode === 'beam';
 
-    beamAlpha = clamp(0.1 * brightness, 0, 0.3);
-    poolAlpha = clamp(0.17 * brightness, 0, 0.32);
+    beam.visible = !selfMode;
+    // 光柱比地面光斑窄：读作「从桁架下来的柱子」，而不是一团白雾。
+    const beamRadius = lastLightRadius * 0.4;
+    beam.scale.set(beamRadius, 1, beamRadius);
+    // 束光：地面光斑压成沿相机方向的椭圆，和散光的正圆区分开。
+    if (beamMode) pool.scale.set(lastLightRadius * 0.82, 1, lastLightRadius * 1.5);
+    else pool.scale.set(lastLightRadius, 1, lastLightRadius);
+    poolEdge.scale.set(pool.scale.x, 1, pool.scale.z);
+
+    beamAlpha = clamp(0.09 * brightness, 0, 0.2);
+    poolAlpha = clamp(0.24 * brightness, 0, 0.4);
+    poolEdgeAlpha = clamp(0.22 * brightness, 0, 0.36);
+    beamMaterial.opacity = beamAlpha;
+    poolMaterial.opacity = poolAlpha;
+    poolEdgeMaterial.opacity = poolEdgeAlpha;
     beamMaterial.opacity = beamAlpha;
     poolMaterial.opacity = poolAlpha;
 
-    const selfMode = light.mode === 'self';
     shield.visible = selfMode;
-    shield.scale.setScalar(SHIELD_RADIUS);
-    shieldAlpha = selfMode ? clamp(0.28 * brightness, 0, 0.4) : 0;
+    shield.scale.setScalar(SHIELD_RADIUS * (1 + pulse * 0.08));
+    shieldAlpha = selfMode ? clamp(0.34 * brightness, 0, 0.5) : 0;
     shieldMaterial.opacity = shieldAlpha;
+
+    // 把光池写进观众材质（P0-2）：被罩住的实例整体提亮/加暖。
+    updateAudienceLightPool(light, pulse, flashValue, visibility);
 
     // 真追光跟随光心（scene 拥有这盏灯；renderer 只改瞄准点）。
     if (bound.scene !== null) {
       const target = bound.scene.lights.key.target;
       target.position.set(light.position.x, 0, light.position.z);
     }
+  }
+
+  /** 观众材质里的光池 uniform（instancing.createAudienceMaterial 挂在 userData.userData['lightPool']）。 */
+  function updateAudienceLightPool(
+    light: LightFrame,
+    pulse: number,
+    flashValue: number,
+    visibility: number,
+  ): void {
+    const material = bound.audience?.mesh.material;
+    if (material === undefined) return;
+    const single = Array.isArray(material) ? material[0] : material;
+    if (single === undefined) return;
+    const uniform = readLightPoolUniform(single);
+    if (uniform === null) return;
+    uniform.position.value.set(light.position.x, light.position.z);
+    uniform.radius.value = lastLightRadius;
+    uniform.boost.value = clamp((0.55 + pulse * 0.5 + flashValue * 0.4) * visibility, 0, 1.4);
+    uniform.color.value.set(light.mode === 'self' ? '#35e0d0' : '#fff1d6');
   }
 
   function applyAudienceLighting(snapshot: RenderSnapshot): void {
@@ -385,7 +444,7 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
     };
     const coneArea = screenFraction(lastLightRadius);
     const shieldArea = shield.visible ? screenFraction(SHIELD_RADIUS) : 0;
-    return clamp(beamAlpha * coneArea + poolAlpha * coneArea + shieldAlpha * shieldArea, 0, 4);
+    return clamp(beamAlpha * coneArea + (poolAlpha + poolEdgeAlpha) * coneArea + shieldAlpha * shieldArea, 0, 4);
   }
 
   function updateStats(): void {
@@ -495,6 +554,8 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
       beamMaterial.dispose();
       pool.geometry.dispose();
       poolMaterial.dispose();
+      poolEdgeGeometry.dispose();
+      poolEdgeMaterial.dispose();
       shieldGeometry.dispose();
       shieldMaterial.dispose();
 
@@ -537,8 +598,7 @@ function createBeamGeometry(): THREE.BufferGeometry {
   return geometry;
 }
 
-/** 地面光池：5 环 × 48 段的径向衰减贴花（无贴图，顶点色即亮度）。 */
-function createPoolGeometry(): THREE.BufferGeometry {
+/** 地面光池：5 环 × 48 段的径向衰减贴花（无贴图，顶点色即亮度）。 */function createPoolGeometry(): THREE.BufferGeometry {
   const segments = 48;
   const rings = 5;
   const positions: number[] = [0, 0, 0];
@@ -548,6 +608,49 @@ function createPoolGeometry(): THREE.BufferGeometry {
   for (let ring = 1; ring <= rings; ring += 1) {
     const radius = ring / rings;
     const brightness = Math.pow(1 - radius, 1.8);
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2;
+      positions.push(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+      colors.push(brightness, brightness, brightness);
+    }
+  }
+
+  for (let segment = 0; segment < segments; segment += 1) {
+    const next = (segment + 1) % segments;
+    indices.push(0, 1 + next, 1 + segment);
+  }
+  for (let ring = 1; ring < rings; ring += 1) {
+    const inner = 1 + (ring - 1) * segments;
+    const outer = 1 + ring * segments;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const next = (segment + 1) % segments;
+      indices.push(inner + segment, outer + segment, outer + next);
+      indices.push(inner + segment, outer + next, inner + next);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+/**
+ * 光池盘：中心 8% 亮度、边缘快速提亮的加法圆盘（顶点色即亮度）。
+ * 放在人群上方 1.42m，不被座椅/观众遮挡；束光模式下按椭圆缩放。
+ */
+function createLightDiscGeometry(): THREE.BufferGeometry {
+  const segments = 56;
+  const rings = 6;
+  const positions: number[] = [0, 0, 0];
+  const colors: number[] = [0.04, 0.04, 0.04];
+  const indices: number[] = [];
+
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const radius = ring / rings;
+    const brightness = 0.04 + 0.52 * Math.pow(radius, 3.4);
     for (let segment = 0; segment < segments; segment += 1) {
       const angle = (segment / segments) * Math.PI * 2;
       positions.push(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
@@ -593,4 +696,29 @@ function applyWhiteoutUniform(mesh: THREE.InstancedMesh, value: number): void {
 
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
+}
+
+/** 观众材质上的光池 uniform（instancing.createAudienceMaterial 的 userData['lightPool']）。 */
+interface LightPoolUniform {
+  readonly position: { value: THREE.Vector2 };
+  readonly radius: { value: number };
+  readonly boost: { value: number };
+  readonly color: { value: THREE.Color };
+}
+
+/** 读取并校验光池 uniform 句柄；缺失（老材质/被替换）时返回 null，不抛错。 */
+function readLightPoolUniform(material: THREE.Material): LightPoolUniform | null {
+  const handle: unknown = material.userData['lightPool'];
+  if (typeof handle !== 'object' || handle === null) return null;
+  const candidate = handle as {
+    position?: { value?: unknown };
+    radius?: { value?: unknown };
+    boost?: { value?: unknown };
+    color?: { value?: unknown };
+  };
+  if (!(candidate.position?.value instanceof THREE.Vector2)) return null;
+  if (typeof candidate.radius?.value !== 'number') return null;
+  if (typeof candidate.boost?.value !== 'number') return null;
+  if (!(candidate.color?.value instanceof THREE.Color)) return null;
+  return handle as LightPoolUniform;
 }

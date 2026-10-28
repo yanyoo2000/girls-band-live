@@ -1,13 +1,14 @@
 /**
- * 战斗 HUD（GDD §12）。
+ * 战斗 HUD（GDD §12；v1.0.1 可读性修复）。
  *
- * 硬规则：局内 0 个数字。时间 = 段位点 + 进度弧；人气 = 白光侵占；
- * 区热度 = 四角形状点；转化/烧死 = 两条无数字的记账线；
- * 卡牌 = 底部构筑条；终曲 = 长按提示 + 环形进度。
+ * 硬规则：局内 0 个数字。人气 = 白光比例 + 10s 趋势 + 空位剪影；
+ * 四区 = 形状点 + 亮灯比例；光 = 散/束/回三格 + 护盾/冷却；返听 = 耳朵 + 倒计时环；
+ * 序曲教学三步不阻断，首次束光覆盖观众时红色反馈。
  */
 
 import type { ReactElement } from 'react';
-import type { HudSnapshot, InstrumentLineId, ZoneHud } from '../../types/game';
+import type { HudSnapshot, InstrumentLineId, LightMode, ZoneHud } from '../../types/game';
+import type { CoreCardId } from '../../types/game';
 import type { RunUiFlags } from '../bridge';
 import {
   SEGMENT_ORDER,
@@ -37,6 +38,18 @@ const LINE_LABELS: Readonly<Record<InstrumentLineId, string>> = {
   drums: '鼓',
 };
 
+const LIGHT_MODES: readonly { readonly id: LightMode; readonly label: string; readonly hint: string }[] = [
+  { id: 'spread', label: '散光', hint: '养人' },
+  { id: 'beam', label: '束光', hint: '烧人' },
+  { id: 'self', label: '回照', hint: '护盾' },
+];
+
+const CORE_HINTS: Readonly<Record<CoreCardId, string>> = {
+  'choir-wall': '四区都养起来时，合唱波更响；散光养人。',
+  'solo-return': '把光收回脚下，护盾亮起；此时不能转化。',
+  'bait-line': '光停住的区会变成诱饵；那里更招噪音。',
+};
+
 const SEGMENT_PIPS: readonly string[] = SEGMENT_ORDER.map((segment) => {
   switch (segment) {
     case 'overture':
@@ -55,6 +68,8 @@ const SEGMENT_PIPS: readonly string[] = SEGMENT_ORDER.map((segment) => {
 });
 
 const TOTAL_SECONDS = 570;
+const CAPACITY = 768;
+const SECOND_ROW_CAPACITY = 64;
 
 /** 0..1 截断。 */
 function clamp01(value: number): number {
@@ -74,11 +89,20 @@ function Whiteout({ whiteout }: { readonly whiteout: number }): ReactElement {
   );
 }
 
-/** 四角区点：形状 + 亮度 + 动作三编码。 */
-function ZoneDots({ zones, overheated }: { readonly zones: readonly [ZoneHud, ZoneHud, ZoneHud, ZoneHud]; readonly overheated: ZoneHud['id'] | null }): ReactElement {
+/** 四角区点：形状 + 热度 + 亮灯比例；形状与动作是第二编码。 */
+function ZoneDots({
+  zones,
+  overheated,
+  ratios,
+}: {
+  readonly zones: readonly [ZoneHud, ZoneHud, ZoneHud, ZoneHud];
+  readonly overheated: HudSnapshot['overheatedZone'];
+  readonly ratios: readonly [number, number, number, number] | undefined;
+}): ReactElement {
   return (
-    <ul className="zone-dots" aria-label="四区热度">
-      {zones.map((zone) => {
+    <ul className="zone-dots" aria-label="四区热度与亮灯比例">
+      {zones.map((zone, index) => {
+        const ratio = ratios?.[index];
         const classes = [
           'zone-dot',
           `zone-dot--${zone.id}`,
@@ -90,18 +114,68 @@ function ZoneDots({ zones, overheated }: { readonly zones: readonly [ZoneHud, Zo
           .filter((value) => value.length > 0)
           .join(' ');
         const aria = `${ZONE_LABELS[zone.id]}，热度${ZONE_HEAT_LABELS[zone.heat]}${
-          zone.waiting ? '，有人在等你' : ''
-        }${zone.blackened ? '，被噪音覆盖' : ''}${overheated === zone.id ? '，过热点' : ''}`;
+          ratio === undefined ? '' : `，亮灯${ratio > 0.66 ? '较亮' : ratio > 0.33 ? '一半' : '偏暗'}`
+        }${zone.waiting ? '，有人在等你' : ''}${zone.blackened ? '，被噪音覆盖' : ''}${
+          overheated === zone.id ? '，过热点' : ''
+        }`;
         return (
           <li key={zone.id} className={classes} aria-label={aria}>
             <span className="zone-dot__shape" aria-hidden="true" />
             <span className="zone-dot__name" aria-hidden="true">
               {ZONE_SHORT[zone.id]}
             </span>
+            <span className="zone-dot__light" aria-hidden="true">
+              <span style={{ width: `${clamp01(ratio ?? 0) * 100}%` }} />
+            </span>
           </li>
         );
       })}
     </ul>
+  );
+}
+
+/** 人气读数：趋势箭头 + 空位剪影 + 第二排剪影（不显示数字）。 */
+function AudienceGauge({ hud }: { readonly hud: HudSnapshot }): ReactElement {
+  const trend = hud.audienceTrend ?? 0;
+  const trendClass = trend > 0 ? 'is-up' : trend < 0 ? 'is-down' : 'is-flat';
+  const trendText = trend > 0 ? '人气上升' : trend < 0 ? '人气下降' : '人气持平';
+  const empty = hud.emptySeats ?? Math.round(clamp01(hud.whiteout / 0.85) * CAPACITY);
+  const presentRatio = clamp01(1 - empty / CAPACITY);
+  const secondRatio = clamp01(1 - (hud.secondRowEmpty ?? 0) / SECOND_ROW_CAPACITY);
+  return (
+    <div className={`audience-gauge ${hud.audienceLow ? 'is-low' : ''}`} aria-label={`${trendText}；空位剪影`}>
+      <span className={`audience-gauge__trend ${trendClass}`} aria-hidden="true">
+        {trend > 0 ? '▲' : trend < 0 ? '▼' : '■'}
+      </span>
+      <span className="audience-gauge__label" aria-hidden="true">
+        人气
+      </span>
+      <span className="audience-gauge__seats" aria-hidden="true">
+        {Array.from({ length: 16 }, (_, index) => (
+          <span key={index} className={index / 16 < presentRatio ? 'is-on' : ''} />
+        ))}
+      </span>
+      <span className="audience-gauge__second" aria-hidden="true">
+        {Array.from({ length: 8 }, (_, index) => (
+          <span key={index} className={index / 8 < secondRatio ? 'is-on' : ''} />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** 空场前预警：边缘脉动 + 一句可执行建议（不显示数字）。 */
+function AudienceWarning({ encoreAvailable }: { readonly encoreAvailable: boolean }): ReactElement {
+  return (
+    <div className="audience-warning" role="status">
+      <span className="audience-warning__mark" aria-hidden="true">
+        !
+      </span>
+      <span className="audience-warning__copy">
+        <strong>人气快见底了</strong>
+        <small>{encoreAvailable ? '还有一次安可，别把光停在空区。' : '切回散光，别再烧人。'}</small>
+      </span>
+    </div>
   );
 }
 
@@ -162,6 +236,70 @@ function SegmentPips({ index, runSeconds }: { readonly index: number; readonly r
   );
 }
 
+/** 光三形态常驻三格 + 当前高亮 + 护盾/冷却/锁定。 */
+function LightState({ hud }: { readonly hud: HudSnapshot }): ReactElement {
+  const mode = hud.lightMode ?? 'spread';
+  const shield = mode === 'self' ? clamp01(hud.soloShield ?? 0) : 0;
+  const cooldown = clamp01(hud.igniteCooldown ?? 0);
+  const lockMax = Math.max(0.001, hud.maxLock ?? hud.maxLockSeconds ?? 7);
+  const lock = hud.returnLocked
+    ? clamp01((hud.lockRemaining ?? hud.returnLockRemaining ?? 0) / lockMax)
+    : 0;
+  return (
+    <div className={`light-state ${mode === 'self' ? 'is-solo' : ''}`} data-mode={mode} aria-label={`光形态：${
+      mode === 'self' ? '回照' : mode === 'beam' ? '束光' : '散光'
+    }`}>
+      <div className="light-state__modes" role="group" aria-label="光形态">
+        {LIGHT_MODES.map((item) => (
+          <span key={item.id} className={`light-state__cell ${mode === item.id ? 'is-active' : ''}`}>
+            <span className="light-state__cell-label">{item.label}</span>
+            <span className="light-state__cell-hint">{item.hint}</span>
+          </span>
+        ))}
+      </div>
+      {mode === 'self' ? <span className="light-state__solo">独奏中</span> : null}
+      <div className="light-state__meters">
+        {shield > 0 ? (
+          <span className="light-state__meter is-shield" aria-label="独奏护盾">
+            <span style={{ width: `${shield * 100}%` }} />
+          </span>
+        ) : null}
+        <span className="light-state__meter is-cooldown" aria-label="点燃冷却">
+          <span style={{ width: `${(1 - cooldown) * 100}%` }} />
+        </span>
+        {lock > 0 ? (
+          <span className="light-state__meter is-lock" aria-label="返听锁定倒计时">
+            <span style={{ width: `${lock * 100}%` }} />
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** 返听锁定：耳朵 + 倒计时环 + 可执行解法。 */
+function ReturnLock({ hud }: { readonly hud: HudSnapshot }): ReactElement | null {
+  if (!hud.returnLocked) {
+    return null;
+  }
+  const max = Math.max(0.001, hud.maxLock ?? hud.maxLockSeconds ?? 7);
+  const remaining = clamp01((hud.lockRemaining ?? hud.returnLockRemaining ?? 0) / max);
+  return (
+    <div className="lock-callout" role="status" aria-label="返听锁定。移光、断视线，或者烧掉它。">
+      <EarIcon className="lock-callout__icon" />
+      <span className="lock-callout__copy">
+        <strong>返听锁定</strong>
+        <small>移光 / 断视线 / 烧掉它</small>
+      </span>
+      <span
+        className="lock-callout__ring"
+        aria-hidden="true"
+        style={{ background: `conic-gradient(var(--gbl-color-danger) ${remaining * 360}deg, rgba(255,255,255,0.12) 0)` }}
+      />
+    </div>
+  );
+}
+
 /** 节拍环：四拍一圈，强拍更亮。 */
 function BeatRing({ phase, strength }: { readonly phase: number; readonly strength: 'strong' | 'weak' }): ReactElement {
   const safe = clamp01(phase);
@@ -179,22 +317,26 @@ function BeatRing({ phase, strength }: { readonly phase: number; readonly streng
   );
 }
 
-/** 构筑条：核心 + 最近三张卡 + 转化/烧死记账 + 卡位点。 */
+/** 构筑条：核心 + 最近三张卡 + 进化 + 转化/烧死记账 + 卡位点。 */
 function BuildStrip({ run }: { readonly run: RunUiFlags }): ReactElement {
   const recent = run.cards.slice(-3);
   const total = run.converted + run.burned;
   const convertShare = total === 0 ? 0 : run.converted / total;
+  const coreHint = run.core === null ? null : CORE_HINTS[run.core.id as CoreCardId] ?? null;
   return (
-    <div className="build-strip" aria-label="当前构筑">
+    <div className="build-strip" aria-label="当前构筑与今晚的账">
       <div className="build-strip__core">
         <span className="build-strip__eyebrow">核心</span>
         <span className={`build-strip__core-name ${run.core === null ? 'is-empty' : ''}`}>
           {run.core?.name ?? '未定核心'}
         </span>
+        {run.evolutionName === undefined || run.evolutionName === null ? null : (
+          <span className="build-strip__evolution">进化：{run.evolutionName}</span>
+        )}
       </div>
       <ul className="build-strip__cards" aria-label="最近获得的卡牌">
         {recent.length === 0 ? (
-          <li className="build-strip__empty">还没有卡</li>
+          <li className="build-strip__empty">{run.core === null ? '还没有卡' : '支援卡未拿'}</li>
         ) : (
           recent.map((card) => (
             <li key={card.id} className={`build-strip__card ${card.category === 'core' ? 'is-core' : ''}`}>
@@ -203,6 +345,7 @@ function BuildStrip({ run }: { readonly run: RunUiFlags }): ReactElement {
           ))
         )}
       </ul>
+      {coreHint === null ? null : <p className="build-strip__hint">{coreHint}</p>}
       <div className="ledger" aria-label="转化与烧死">
         <span className="ledger__label" aria-hidden="true">
           账
@@ -278,6 +421,51 @@ function StatusIcons({ hud }: { readonly hud: HudSnapshot }): ReactElement {
   );
 }
 
+/** 断线：图标 + 文字 + E 提示（不依赖读屏）。 */
+function BrokenNotice({ lines }: { readonly lines: readonly InstrumentLineId[] }): ReactElement | null {
+  if (lines.length === 0) {
+    return null;
+  }
+  return (
+    <div className="broken-notice" role="status">
+      <PlugIcon />
+      <span>
+        {lines.map((line) => LINE_LABELS[line]).join(' / ')}线断了 · 靠近队友按 E 插线
+      </span>
+    </div>
+  );
+}
+
+/** 序曲三步教学：0–30 秒，不强停、不遮操作。 */
+function TutorialCoach({ runSeconds }: { readonly runSeconds: number }): ReactElement | null {
+  if (runSeconds >= 30) {
+    return null;
+  }
+  const step = runSeconds < 9 ? 0 : runSeconds < 19 ? 1 : 2;
+  const steps: readonly { readonly title: string; readonly body: string }[] = [
+    { title: '散光养人', body: '移动鼠标或 IJKL 移光；松开左键就是散光，被照到的人会留下来。' },
+    { title: '束光烧人', body: '按住左键或 Shift＝束光，光里的观众会被烧；松开才养人。' },
+    { title: '点击点燃', body: '点击或 Enter 点燃；落在拍点更亮。看哪里，噪音就从哪里来。' },
+  ];
+  const current = steps[step];
+  if (current === undefined) {
+    return null;
+  }
+  return (
+    <div className={`tutorial tutorial--step-${step}`} aria-live="polite">
+      <span className="tutorial__dots" aria-hidden="true">
+        {steps.map((item, index) => (
+          <span key={item.title} className={index === step ? 'is-active' : ''} />
+        ))}
+      </span>
+      <span className="tutorial__copy">
+        <strong>{current.title}</strong>
+        <small>{current.body}</small>
+      </span>
+    </div>
+  );
+}
+
 /** 终曲：放下光。 */
 function FinalePrompt({ progress }: { readonly progress: number }): ReactElement {
   const safe = clamp01(progress);
@@ -298,27 +486,65 @@ function FinalePrompt({ progress }: { readonly progress: number }): ReactElement
   );
 }
 
+/** 读屏趋势摘要：5–10s 量级的变化，不逐拍刷屏。 */
+function HudLiveStatus({ hud, run }: { readonly hud: HudSnapshot; readonly run: RunUiFlags }): ReactElement {
+  const trend = hud.audienceTrend ?? 0;
+  const trendText = trend > 0 ? '人气上升' : trend < 0 ? '人气下降' : '人气持平';
+  const low = hud.audienceLow ? '空场预警。' : '';
+  const empty = run.emptyHouse ? '已经空场，只剩主唱。' : '';
+  const mode = hud.lightMode === 'self' ? '回照' : hud.lightMode === 'beam' ? '束光' : '散光';
+  const zones = hud.zones
+    .map((zone) => `${ZONE_LABELS[zone.id]}热度${ZONE_HEAT_LABELS[zone.heat]}`)
+    .join('；');
+  const lock = hud.returnLocked ? '返听锁定，移光或断视线。' : '';
+  const broken = hud.brokenLines.length > 0 ? `断线：${hud.brokenLines.map((line) => LINE_LABELS[line]).join('、')}。` : '';
+  return (
+    <p className="sr-only hud-live" aria-live="polite" aria-atomic="true">
+      {`${trendText}。${low}${empty}光形态${mode}。${zones}。${lock}${broken}`}
+    </p>
+  );
+}
+
 /** 战斗 HUD 根组件。 */
 export function Hud({ hud, run, onPause, onSkipEmptyHouse }: HudProps): ReactElement {
+  const burning = hud.lightMode === 'beam' && hud.lightCoverage > 0.015;
+  const classes = [
+    'hud',
+    hud.critical || hud.audienceLow ? 'hud--critical' : '',
+    hud.whiteout > 0.2 ? 'hud--whiteout' : '',
+    run.emptyHouse ? 'hud--empty' : '',
+    burning ? 'hud--burning' : '',
+  ]
+    .filter((value) => value.length > 0)
+    .join(' ');
+
   return (
-    <div
-      className={`hud ${hud.critical ? 'hud--critical' : ''} ${
-        hud.whiteout > 0.2 ? 'hud--whiteout' : ''
-      } ${run.emptyHouse ? 'hud--empty' : ''}`}
-      data-revision={hud.revision}
-      aria-label="演出信息"
-    >
+    <div className={classes} data-revision={hud.revision} aria-label="演出信息">
       <Whiteout whiteout={hud.whiteout} />
       <div className="hud__content">
         <div className="hud__top">
           <SegmentPips index={hud.segmentIndex} runSeconds={hud.runSeconds} />
           <DangerBar coverage={hud.lightCoverage} pressure={hud.noisePressure} />
+          <ReturnLock hud={hud} />
+          {hud.audienceLow && !run.emptyHouse ? (
+            <AudienceWarning encoreAvailable={hud.encoreAvailable} />
+          ) : null}
         </div>
 
-        <ZoneDots zones={hud.zones} overheated={hud.overheatedZone} />
+        <ZoneDots zones={hud.zones} overheated={hud.overheatedZone} ratios={hud.zoneLightRatios} />
+        <AudienceGauge hud={hud} />
+        <TutorialCoach runSeconds={hud.runSeconds} />
         <StatusIcons hud={hud} />
+        <BrokenNotice lines={hud.brokenLines} />
+        <LightState hud={hud} />
         <BuildStrip run={run} />
         <BeatRing phase={hud.beatPhase} strength={hud.beatStrength} />
+
+        {burning ? (
+          <div className="beam-burn" role="status">
+            束光正在烧人 · 松开回散光养人
+          </div>
+        ) : null}
 
         {hud.segmentIndex === 4 ? <FinalePrompt progress={hud.holdProgress} /> : null}
 
@@ -341,9 +567,11 @@ export function Hud({ hud, run, onPause, onSkipEmptyHouse }: HudProps): ReactEle
         >
           <PauseIcon />
         </button>
-        <p className="hud__hint" aria-hidden="true">
-          Esc 暂停 · Tab 看构筑
+        <p className="hud__hint">
+          <span>IJKL 移光 · Shift 束光 · Enter 点燃</span>
+          <span>Esc 暂停 · Tab 构筑 · Space 终曲</span>
         </p>
+        <HudLiveStatus hud={hud} run={run} />
       </div>
     </div>
   );

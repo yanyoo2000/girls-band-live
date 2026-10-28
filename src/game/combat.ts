@@ -20,6 +20,7 @@
 import type { Meters, NoiseEntity, Ratio, RunState, Seconds, Vec2, ZoneId } from '../types/game';
 import type { DataRegistry, EvolutionDef, ModifierKey } from '../types/data';
 import { collectModifiers } from './progression';
+import { countPresent } from './audience';
 import { countActiveNoises, segmentAt, zoneAtPoint, zoneCenterOf } from './waves';
 
 /** 一次结算的产出（由 store 落账到 RunStats / 观众）。 */
@@ -177,9 +178,11 @@ export function choirDamageForZone(run: RunState, data: DataRegistry, zone: Zone
   const singers = countZoneColored(run, data, zone);
   const heatFactor = 0.5 + 0.5 * zoneState.heat;
   const chord = chordFactor(run, data, zone);
+  const allZones40 = data.zones.every((zone) => countPresent(run.audience, zone.id) >= 40);
+  const waveCard = Math.max(0, combatModifier(run, data, 'wave-damage-multiplier'));
   const cardBonus =
     1 +
-    Math.max(0, combatModifier(run, data, 'wave-damage-multiplier')) +
+    (allZones40 ? waveCard : 0) +
     Math.max(0, combatModifier(run, data, 'all-zone-damage-multiplier')) +
     Math.max(0, combatModifier(run, data, 'zone-output-multiplier'));
   const perNoise = Math.max(0, combatModifier(run, data, 'damage-per-noise'));
@@ -353,7 +356,7 @@ function settleSungNoises(
 ): { readonly sung: number; readonly converted: number } {
   let sung = 0;
   let converted = 0;
-  const normalRatio = conversionRatio(run, data);
+  const normalRatio = noiseConversionValue(run, data);
   for (const entity of run.noises) {
     if (!entity.active || entity.state !== 'singing') continue;
     if (entity.singProgress < 1) continue;
@@ -369,12 +372,13 @@ function settleSungNoises(
 }
 
 /** 唱化产出人数：默认 `balance.conversion.noiseToAudience`，黑潮返场时 1:4（GDD §10.3）。 */
-function conversionRatio(run: RunState, data: DataRegistry): number {
+export function noiseConversionValue(run: RunState, data: DataRegistry): number {
   const evolution = activeEvolution(run, data);
   if (evolution && evolution.effect.kind === 'black-tide-encore') {
     return evolution.effect.waveConvertRatio;
   }
-  return data.balance.conversion.noiseToAudience;
+  const waveConvert = Math.max(0, combatModifier(run, data, 'wave-convert-count'));
+  return Math.max(data.balance.conversion.noiseToAudience, waveConvert);
 }
 
 /** 返听唱化产出（20 人，GDD §8.2）再乘「返听诱饵」；enemies 唱化结算与本文件共用同一公式。 */

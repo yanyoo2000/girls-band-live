@@ -29,7 +29,8 @@ import type {
   Vec2,
   ZoneId,
 } from '../types/game';
-import type { DataRegistry, ZoneDef } from '../types/data';
+import type { DataRegistry, ModifierKey, ZoneDef } from '../types/data';
+import { collectModifiers } from './progression';
 import { nearestSeatColumn, nearestSeatRow, seatAtPoint, seatPositionOf } from '../data/seats';
 
 /** 座区固定顺序（与 `ZoneId` 联合类型、§7.4 的渲染实例顺序一致）。 */
@@ -429,11 +430,21 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
   const seatSec = balance.conversion.seatSec;
   const interruptRetain = balance.conversion.interruptRetain;
   const riseSec = balance.heat.riseSec;
-  const decayDelay = balance.heat.decayDelay;
   const decaySec = balance.heat.decaySec;
   const heat4DecayMultiplier = balance.heat.heat4DecayMultiplier;
   const overheatSeconds = balance.heat.overheatSeconds;
   const heatCap = run.build.cards.includes('heat-cap') ? 4 : 3;
+  const modifier = (key: ModifierKey): number =>
+    collectModifiers(run.build, data).get(key) ?? 0;
+  const decayDelay = balance.heat.decayDelay + Math.max(0, modifier('heat-decay-delay'));
+  const backRowExtra = Math.max(0, modifier('back-row-decay-extra'));
+  const frontRowFloor = Math.max(0, modifier('front-row-heat-floor'));
+  const blackResingMultiplier = 1 + Math.max(0, modifier('black-resing-multiplier'));
+  const baitZone = run.build.coreCard === 'bait-line' ? run.light.lightingZone : null;
+  const zoneHeatCap = (zoneId: ZoneId): number =>
+    baitZone !== null && zoneId === baitZone
+      ? Math.min(heatCap, Math.max(1, Math.round(modifier('black-zone-heat-cap'))))
+      : heatCap;
   // 半径由 light.ts 统一收窄（返听锁定 −30%、Boss 吞光、失真吞光），此处不重复乘。
   const lightRadius = run.light.radius;
   const lightRadiusSquared = lightRadius * lightRadius;
@@ -519,12 +530,20 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
   const lightZone = run.light.lightingZone;
   const lightZoneState = lightZone === null ? null : run.zones[lightZone];
   const overheated = lightZoneState?.overheat === true;
+  // 回照护盾：独奏时优先用护盾吸收一次压力流失（shield-max/regen 的真实消费点）。
+  const absorbWithShield = (): boolean => {
+    if (run.light.mode !== 'self' || run.light.soloShield <= 0) return false;
+    run.light.soloShield = Math.max(0, run.light.soloShield - 12);
+    return true;
+  };
   if (run.returnListener.locked) {
     runtime.lockedDrainClock = (runtime.lockedDrainClock ?? 0) + dt;
     while ((runtime.lockedDrainClock ?? 0) >= PRESSURE_DRAIN_SEC) {
       runtime.lockedDrainClock = (runtime.lockedDrainClock ?? 0) - PRESSURE_DRAIN_SEC;
       const drainZone = lightZone ?? ZONE_ORDER[0] ?? 'front-left';
-      evicted += evictFromAnywhere(frame, runtime, data, drainZone, 1, casts, 'cooled');
+      if (!absorbWithShield()) {
+        evicted += evictFromAnywhere(frame, runtime, data, drainZone, 1, casts, 'cooled');
+      }
     }
   } else {
     runtime.lockedDrainClock = 0;
@@ -533,7 +552,9 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
     runtime.overheatDrainClock = (runtime.overheatDrainClock ?? 0) + dt;
     while ((runtime.overheatDrainClock ?? 0) >= OVERHEAT_DRAIN_SEC) {
       runtime.overheatDrainClock = (runtime.overheatDrainClock ?? 0) - OVERHEAT_DRAIN_SEC;
-      evicted += evictFromAnywhere(frame, runtime, data, lightZone, 1, casts, 'overheat');
+      if (!absorbWithShield()) {
+        evicted += evictFromAnywhere(frame, runtime, data, lightZone, 1, casts, 'overheat');
+      }
     }
   } else {
     runtime.overheatDrainClock = 0;
@@ -589,8 +610,10 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
           runtime.heatClock[seat] = (runtime.heatClock[seat] ?? 0) + dt;
         }
         let currentHeat = frame.heat[seat] ?? 0;
-        while ((runtime.heatClock[seat] ?? 0) >= riseSec && currentHeat < heatCap) {
-          currentHeat = nextHeat(currentHeat, heatCap);
+        const seatZoneId = zones[frame.zone[seat] ?? 0]?.id ?? 'front-left';
+        const cap = zoneHeatCap(seatZoneId);
+        while ((runtime.heatClock[seat] ?? 0) >= riseSec && currentHeat < cap) {
+          currentHeat = nextHeat(currentHeat, cap);
           runtime.heatClock[seat] = (runtime.heatClock[seat] ?? 0) - riseSec;
           runtime.changed[seat] = 1;
         }
@@ -601,7 +624,8 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
         const recovery = data.noise['floor-noise'].singSeconds;
         const seatZoneId = zones[frame.zone[seat] ?? 0]?.id ?? 'front-left';
         if ((run.zones[seatZoneId]?.heat ?? 0) >= balance.noise.singHeatRequired) {
-          runtime.progress[seat] = (runtime.progress[seat] ?? 0) + dt;
+          runtime.progress[seat] =
+            (runtime.progress[seat] ?? 0) + dt * blackResingMultiplier;
           if ((runtime.progress[seat] ?? 0) >= recovery) {
             frame.state[seat] = 2;
             frame.phone[seat] = 1;
@@ -629,14 +653,23 @@ export function updateAudience(run: RunState, data: DataRegistry, dt: Seconds): 
       runtime.litSeconds[seat] = 0;
       if (state === 2) {
         runtime.darkSeconds[seat] = (runtime.darkSeconds[seat] ?? 0) + dt;
-        if ((runtime.darkSeconds[seat] ?? 0) > decayDelay) {
+        const row = Math.floor(seat / data.seats.cols);
+        const seatDecayDelay = Math.max(
+          0,
+          decayDelay - (row >= 12 ? backRowExtra : 0),
+        );
+        if ((runtime.darkSeconds[seat] ?? 0) > seatDecayDelay) {
           const seatZoneId = zones[frame.zone[seat] ?? 0]?.id ?? 'front-left';
           const overheat = run.zones[seatZoneId]?.overheat === true;
           const multiplier = (frame.heat[seat] ?? 0) >= 4 ? heat4DecayMultiplier : 1;
           runtime.decayClock[seat] =
             (runtime.decayClock[seat] ?? 0) + dt * multiplier * (overheat ? 2 : 1);
           let currentHeat = frame.heat[seat] ?? 0;
-          while ((runtime.decayClock[seat] ?? 0) >= decaySec && currentHeat > 0) {
+          const floor = row < 2 ? frontRowFloor : 0;
+          while (
+            (runtime.decayClock[seat] ?? 0) >= decaySec &&
+            currentHeat > floor
+          ) {
             currentHeat -= 1;
             runtime.decayClock[seat] = (runtime.decayClock[seat] ?? 0) - decaySec;
             runtime.changed[seat] = 1;
