@@ -1,5 +1,7 @@
 # M6 候选版验证报告（t109 / qa-automation）
 
+> **版本注记（M7 发行包装，2026-10-28）**：本报告是 **t109 旧版**（产物 1,041,922 B / `9277a800…`），其中 AC-F08 的 **fail** 结论已被 **t113**（峰值基准修复 + acceptance/tech-spec/GDD 同步）与 **t123**（最终审查复核）取代；当前发布候选为 **1,045,498 B / `2d2d91c2…`**。本报告的 P0 矩阵与 blocked 清单仅作历史证据，最终结论以 [docs/reports/m6-gate.md](../reports/m6-gate.md) 与 [docs/reports/m6-rc.md](../reports/m6-rc.md) 为准。
+
 - **日期**：2026-10-28 04:19–04:36（Asia/Shanghai）
 - **验证对象**：候选版单文件 `dist/girls-band-live.html`（由本机 `npm run build` 新构建，未复用 t108 产物结论）
 - **环境**：Windows 10/11 x64、Node v24.13.0、npm 11.6.2、Vitest 5.0.5、**Microsoft Edge 156.0.0.0（Chromium）**、viewport 1280×673（devicePixelRatio 2，截图 2560×1346）
