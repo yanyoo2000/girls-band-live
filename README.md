@@ -2,12 +2,12 @@
 
 > **少女乐队 × 吸血鬼幸存者**：你只有一束光——照向台下，他们为你燃烧，噪音也循光而来。整场演出你只做一件事：**决定看哪里。**
 
-**状态**：v1.0.0 已发布（GitHub Release） · **平台**：桌面浏览器（WebGL2） · **素材**：零外部素材
+**状态**：v1.0.0 已发布（GitHub Release + GitHub Pages 在线版） · **平台**：桌面浏览器（WebGL2） · **素材**：零外部素材
 
 - **成品名**：《谁在听》（英文副题 WHO'S LISTENING）；仓库代号 Girls Band Live（`girls-band-live`）。乐队「留声」，场馆 B2 旧货仓，本场曲目《再亮一会儿》。
 - **形态**：桌面浏览器、离线单文件、`file://` 双击可玩；**零外部素材、零运行时网络请求**。
 - **技术栈**：React 19 + TypeScript 5.9 + Three.js 0.186 + Vite 8（Vitest 5 单元测试）。
-- **发布状态**：**v1.0.0 已发布**（[GitHub Release](https://github.com/yanyoo2000/girls-band-live/releases/tag/v1.0.0)）；单文件附件即 `dist/girls-band-live.html`。GitHub Pages 公开部署待用户确认。
+- **发布状态**：**v1.0.0 已发布**（[GitHub Release](https://github.com/yanyoo2000/girls-band-live/releases/tag/v1.0.0) · **在线试玩**：https://yanyoo2000.github.io/girls-band-live/ ）；单文件附件即 `dist/girls-band-live.html`。
   - 最终构建：`dist/girls-band-live.html` = 根 `index.html` = **1,045,498 B（1,021.0 KiB，0.997 MiB）**，SHA-256 `2D2D91C2670BB447AD27D27950A627502D1AA9E7FFBD6AA6BDF14768014E0079`（2026-10-28）。
   - 四命令：`typecheck` exit 0；`test` **26 文件 / 268 用例**；`build` 两次构建同 SHA；`validate` **14/14**。
   - 发布流程见 [docs/release-checklist.md](docs/release-checklist.md)，最终产物、发布步骤与待确认项见 [docs/reports/m7-release.md](docs/reports/m7-release.md)。
