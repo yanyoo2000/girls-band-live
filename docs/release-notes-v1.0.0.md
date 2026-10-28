@@ -4,6 +4,7 @@
 
 ## 下载与运行
 
+- **在线试玩**：https://yanyoo2000.github.io/girls-band-live/ （GitHub Pages，桌面浏览器 + WebGL2）
 - 下载 Release 附件 **`girls-band-live.html`**（单文件、离线、零外部素材）。
 - 双击或拖入 **Chrome / Edge / Firefox**；需要 WebGL2 与硬件加速，窗口 ≥1280×720（最小 1024×640）。
 - 无需联网、无需安装；只在 `localStorage` 的 `gbl.save.v1` 保存设置与记录。
