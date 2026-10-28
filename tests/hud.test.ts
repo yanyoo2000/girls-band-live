@@ -1,7 +1,8 @@
 /**
  * tech-spec §11 #13：HUD 快照。
  *
- * 必测：白光公式 `0.85 × (1 − a/768)`；四区 waiting；0 数字（字段无 number 展示项）。
+ * 必测：白光公式以「本局峰值人气」为满血基准（t108 修正：开局 30/768 不再 0.82 洗白）；
+ * 四区 waiting；0 数字（字段无 number 展示项）。
  */
 import { describe, expect, it } from 'vitest';
 import { computeWhiteout, countPresent } from '../src/game/audience';
@@ -28,6 +29,18 @@ describe('computeWhiteout', () => {
     }
   });
 
+  it('应以峰值人气为满血基准（开局 30 人时为 0，不是 0.82）', () => {
+    // t108 修复：旧公式 0.85×(1−30/768)=0.8168 会把前 90 秒洗白。
+    expect(computeWhiteout(30, 768)).toBeCloseTo(0.816796875, 9);
+    expect(computeWhiteout(30, 768, 30)).toBe(0);
+    expect(computeWhiteout(15, 768, 30)).toBeCloseTo(0.425, 10);
+    expect(computeWhiteout(0, 768, 30)).toBeCloseTo(0.85, 10);
+    // 峰值 300 时掉到 150：掉一半 → 0.425。
+    expect(computeWhiteout(150, 768, 300)).toBeCloseTo(0.425, 10);
+    // 观众超过峰值（成长中）也不会出现负值。
+    expect(computeWhiteout(400, 768, 300)).toBe(0);
+  });
+
   it('应对越界输入 clamp（负观众、超容量、容量 0）', () => {
     expect(computeWhiteout(-10, 768)).toBeCloseTo(0.85, 10);
     expect(computeWhiteout(9999, 768)).toBe(0);
@@ -45,19 +58,18 @@ describe('HudSnapshot 形状', () => {
     harness.dispose();
   });
 
-  it('应在开局后按出席人数给出白光比例', () => {
+  it('应在开局后按峰值人气给出白光比例（开局为 0）', () => {
     const harness = createHarness();
     harness.start(42);
     const run = harness.store.getRun();
     expect(run).not.toBeNull();
-    let present = 0;
-    const state = run?.audience.state ?? new Uint8Array(0);
-    for (let i = 0; i < state.length; i += 1) {
-      const code = state[i] ?? 0;
-      if (code === 1 || code === 2 || code === 3) present += 1;
-    }
+    const present = run === null ? 0 : countPresent(run.audience, null);
+    expect(present).toBeGreaterThan(0);
+    const peak = Math.max(present, run?.stats.peakAudience ?? present);
     const hud = harness.store.getHud();
-    expect(hud.whiteout).toBeCloseTo(computeWhiteout(present, 768), 10);
+    expect(hud.whiteout).toBeCloseTo(computeWhiteout(present, 768, peak), 10);
+    // 开局满血：白光必须为 0，不能因“空座多”把前 90 秒洗白。
+    expect(hud.whiteout).toBeCloseTo(0, 10);
     harness.dispose();
   });
 

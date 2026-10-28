@@ -5,9 +5,8 @@
  * 保证同一 seed + 同一输入序列在任何机器上得到同一局面（确定性）。
  * 逻辑时间不读帧时钟；帧时钟只用于 `FrameStats`（QA 面板与自动降级）。
  *
- * 依赖：`../types/game`（AudioPort / FrameIndex / PointerProjector / Seconds）、
- * `../types/save`（DisplaySettings）、`./store`（GameStore）、`./input`（InputSampler）、
- * `../three/renderer`（FrameRenderer，只依赖其接口）。
+ * 依赖：`../types/game`（AudioPort / FrameIndex / PointerProjector / Seconds / FrameRenderer）、
+ * `../types/save`（DisplaySettings）、`./store`（GameStore）、`./input`（InputSampler）。
  * 宿主 API：`requestAnimationFrame` 是 game 层唯一的宿主调度入口（tech-spec §6.4
  * 明确 loop 用 rAF 常驻）；`performance.now()` 只用于帧耗时统计，不参与玩法时间。
  * 若无 rAF（Node 单测），退化为 16ms `setTimeout`。
@@ -16,11 +15,10 @@
  *
  * 导出：`FrameStats` / `LoopDeps` / `LoopHandle` 类型与 `createLoop(deps)`。
  */
-import type { AudioPort, FrameIndex, PointerProjector, Seconds } from '../types/game';
+import type { AudioPort, FrameIndex, FrameRenderer, PointerProjector, Seconds } from '../types/game';
 import type { DisplaySettings } from '../types/save';
 import type { GameStore } from './store';
 import type { InputSampler } from './input';
-import type { FrameRenderer } from '../three/renderer';
 
 /** 固定步长（秒）：60Hz；与 `balance.performance.fixedStepHz` 一致。 */
 const FIXED_STEP: Seconds = 1 / 60;

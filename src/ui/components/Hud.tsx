@@ -302,7 +302,9 @@ function FinalePrompt({ progress }: { readonly progress: number }): ReactElement
 export function Hud({ hud, run, onPause, onSkipEmptyHouse }: HudProps): ReactElement {
   return (
     <div
-      className={`hud ${hud.critical ? 'hud--critical' : ''} ${run.emptyHouse ? 'hud--empty' : ''}`}
+      className={`hud ${hud.critical ? 'hud--critical' : ''} ${
+        hud.whiteout > 0.2 ? 'hud--whiteout' : ''
+      } ${run.emptyHouse ? 'hud--empty' : ''}`}
       data-revision={hud.revision}
       aria-label="演出信息"
     >

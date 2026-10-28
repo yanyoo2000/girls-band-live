@@ -9,6 +9,8 @@
  * 依据：docs/gdd.md §22.1；docs/tech-spec.md §5。
  */
 
+import type { DisplaySettings } from './save';
+
 /* ==========================================================================
  * 1. 标量与几何
  * ========================================================================== */
@@ -767,6 +769,44 @@ export interface RenderSnapshot {
   readonly flash: Ratio;
   /** 是否处于「静默」段（渲染层关掉自发光观众的手机灯）。 */
   readonly silenced: boolean;
+  /**
+   * 白光（血量）比例 0..0.85，与 `HudSnapshot.whiteout` 同源（峰值基准，见 §14.3）。
+   * 渲染层与 DOM 遮罩共用这一个值，禁止各自推导。
+   */
+  readonly whiteout: Ratio;
+}
+
+/** 渲染器信息（GL 能力，供 QA 面板与降级判断）。 */
+export interface RendererInfo {
+  readonly webglVersion: 2;
+  readonly maxTextureSize: number;
+  readonly gpu: string;
+}
+
+/** 单帧渲染统计（`renderer.info` + overdraw 解析估算，§9.3）。 */
+export interface RenderStats {
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly programs: number;
+  readonly textures: number;
+  readonly geometries: number;
+  /** 半透明层叠的解析估算（§9.3），≤2.5。 */
+  readonly overdrawEstimate: number;
+  readonly dpr: number;
+}
+
+/**
+ * 渲染入口契约（tech-spec §5.4）。
+ *
+ * 放在 `types/game.ts` 的原因：`game/loop` 需要引用它，而 game 层不得 import three（§3.2）。
+ * 实现由 `three/renderer.ts` 提供，main 在装配时注入 loop。
+ */
+export interface FrameRenderer {
+  readonly info: RendererInfo;
+  resize(width: number, height: number, dpr: number): void;
+  draw(snapshot: RenderSnapshot, settings: DisplaySettings): void;
+  stats(): RenderStats;
+  dispose(): void;
 }
 
 /* ==========================================================================

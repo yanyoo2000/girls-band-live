@@ -59,7 +59,7 @@ import type { DataRegistry } from '../types/data';
 import type { SavePort } from '../types/save';
 import { createRng } from './rng';
 import { createEntityWorld, updateEntities } from './entities';
-import { evaluateIgnite, queryLitSeats, updateLight } from './light';
+import { evaluateIgnite, hasPlayerMovedLight, queryLitSeats, updateLight } from './light';
 import {
   computeWhiteout,
   countPresent,
@@ -81,6 +81,7 @@ import { resolveChoirWave, resolveIgniteDamage } from './combat';
 import { updateBoss } from './boss';
 import { addExperience, applyCard, createBuild } from './progression';
 import { updateRecords } from './save';
+import { OPENING_GRACE_SEC } from '../data/segments';
 
 export interface StoreDeps {
   readonly data: DataRegistry;
@@ -167,6 +168,8 @@ interface MutableRender {
   venueLight: number;
   flash: number;
   silenced: boolean;
+  /** 白光（血量）比例；与 HUD 同源，按峰值基准（§14.3）。 */
+  whiteout: number;
 }
 
 interface MutableDirtyRange {
@@ -362,6 +365,27 @@ function createBoss(): BossState {
   return { phase: 'bus', phaseStartedAt: 0, retired: false, strippedZone: null };
 }
 
+/**
+ * 第二排空位（四区）：每个座区自己的第二排，共 4×16=64 席。
+ *
+ * M3 修正：旧实现只数全场第 1 排（32 席），在 664 个空位时仍可能报 0，
+ * 与“第二排空位”的语义不符；现在按区取 rowRange[0]+1（后区自动是第 13 排）。
+ */
+export function countSecondRowEmpty(data: DataRegistry, frame: RunState['audience']): number {
+  let empty = 0;
+  for (const zone of data.zones) {
+    const row = Math.min(zone.rowRange[1], zone.rowRange[0] + 1);
+    for (let col = zone.colRange[0]; col <= zone.colRange[1]; col += 1) {
+      const seat = row * data.seats.cols + col;
+      const state = frame.state[seat] ?? 0;
+      if (state !== 1 && state !== 2 && state !== 3) {
+        empty += 1;
+      }
+    }
+  }
+  return empty;
+}
+
 function createReturnListener(data: DataRegistry): ReturnListenerState {
   const def = data.noise['return-listener'];
   return {
@@ -517,6 +541,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
     venueLight: 1,
     flash: 0,
     silenced: false,
+    whiteout: 0,
   };
 
   let hud: HudSnapshot = emptyHud();
@@ -607,7 +632,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
       return emptyHud();
     }
     const present = countPresent(run.audience, null);
-    const whiteout = computeWhiteout(present, capacity);
+    const whiteout = computeWhiteout(present, capacity, Math.max(1, stats.peakAudience, present));
     const lit = queryLitSeats(run, data, litSeats);
     const coverage = present > 0 ? Math.min(1, lit / present) : 0;
     let noiseActive = 0;
@@ -699,6 +724,8 @@ export function createGameStore(deps: StoreDeps): GameStore {
     simFrame += 1;
     render.frame = simFrame;
     render.audience = run.audience;
+    const presentNow = countPresent(run.audience, null);
+    render.whiteout = computeWhiteout(presentNow, capacity, Math.max(1, stats.peakAudience, presentNow));
     camera.target.x = run.player.position.x;
     camera.target.z = run.player.position.z;
     camera.zoom = 1;
@@ -872,23 +899,6 @@ export function createGameStore(deps: StoreDeps): GameStore {
     };
   };
 
-  const countSecondRowEmpty = (): number => {
-    if (run === null) {
-      return 0;
-    }
-    const frame = run.audience;
-    const row = 1;
-    let empty = 0;
-    for (let col = 0; col < data.seats.cols; col += 1) {
-      const seat = row * data.seats.cols + col;
-      const state = frame.state[seat] ?? 0;
-      if (state !== 1 && state !== 2 && state !== 3) {
-        empty += 1;
-      }
-    }
-    return empty;
-  };
-
   const zoneCounts = (): Readonly<Record<ZoneId, number>> => {
     return {
       'front-left': run === null ? 0 : countPresent(run.audience, 'front-left'),
@@ -997,7 +1007,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
       stats: snapshot,
       zoneCounts: zoneCounts(),
       emptySeats: Math.max(0, capacity - present),
-      secondRowEmpty: countSecondRowEmpty(),
+      secondRowEmpty: countSecondRowEmpty(data, run.audience),
       failure,
     };
     run.stats = snapshot;
@@ -1058,6 +1068,11 @@ export function createGameStore(deps: StoreDeps): GameStore {
       deps.audio.setSegment(musical.segment);
     }
 
+    // 本 tick 的经验来源汇总（t121：不再只靠灰→彩；唱化/点燃/人浪/击杀/演出都计入）。
+    // 演出经验随在场人数略微提高，避免“全程空场”也拿满级；基础 0.7/s 保证 9:30 至少 6 次三选一。
+    const presentForXp = countPresent(run.audience, null);
+    let xpThisTick = dt * (0.7 + Math.min(0.5, presentForXp / 768) * 0.6);
+
     // 1) 玩家移动（舞台范围限制）。
     const move = input.move;
     if (move.x !== 0 || move.z !== 0) {
@@ -1110,12 +1125,15 @@ export function createGameStore(deps: StoreDeps): GameStore {
         stats.ignitesOff += 1;
         windowIgnites[2] += 1;
       }
+      // 点燃本身给少量经验（完美/良好更多），击杀再按噪声数计。
+      xpThisTick += ignite.quality === 'perfect' ? 3 : ignite.quality === 'good' ? 2 : 1;
       igniteTimes[igniteTimeCursor] = run.time;
       igniteTimeCursor = (igniteTimeCursor + 1) % igniteTimes.length;
 
       const zones = zone === null ? [] : [zone];
       const damage = resolveIgniteDamage(run, data, zones, ignite.multiplier);
       stats.burned += damage.burned;
+      xpThisTick += damage.converted + Math.min(8, damage.burned);
       if (damage.converted > 0) {
         stats.converted += damage.converted;
         addColoredAudience(damage.converted);
@@ -1167,6 +1185,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
     void listener.released;
     if (listener.converted > 0) {
       stats.converted += listener.converted;
+      xpThisTick += listener.converted;
       addColoredAudience(listener.converted);
     }
 
@@ -1218,13 +1237,18 @@ export function createGameStore(deps: StoreDeps): GameStore {
     }
     if (wave.converted > 0) {
       stats.converted += wave.converted;
+      xpThisTick += wave.converted;
     }
 
     // 9) 合唱波（每 4 拍自动开火；烧穿/唱化产出）。
     const choir = resolveChoirWave(run, data, dt);
     stats.burned += choir.burned;
+    if (choir.burned > 0) {
+      xpThisTick += Math.min(12, choir.burned);
+    }
     if (choir.converted > 0) {
       stats.converted += choir.converted;
+      xpThisTick += choir.converted;
       addColoredAudience(choir.converted);
     }
 
@@ -1232,6 +1256,19 @@ export function createGameStore(deps: StoreDeps): GameStore {
     const delta = updateAudience(run, data, dt);
     stats.converted += delta.converted;
     stats.covered += delta.black;
+    xpThisTick += delta.converted;
+
+    // H1：开场宽限 / 首次 pointermove 前，不累计区过热计时，也不触发返听锁定。
+    // 光本身的锚点在 light.ts 里同步清零；这里清区级 litSeconds（否则 8s 过热仍会提前）。
+    if (run.time < OPENING_GRACE_SEC || !hasPlayerMovedLight(run)) {
+      for (const zoneId of ZONE_ORDER) {
+        const zoneState = run.zones[zoneId];
+        if (zoneState !== undefined) {
+          zoneState.litSeconds = 0;
+          zoneState.overheat = false;
+        }
+      }
+    }
 
     // 11) 状态差分 → 事件（转化 / 覆盖 / 离场）。逐席比较，成本 768 次/tick。
     if (prevState.length === run.audience.size) {
@@ -1268,10 +1305,7 @@ export function createGameStore(deps: StoreDeps): GameStore {
 
     // 12) 经验与升级（冻结由 phase 处理）。
     const crowdWaveXp = data.progression.experience.crowdWave;
-    let experience = delta.converted;
-    if (wave.triggered > 0) {
-      experience += crowdWaveXp;
-    }
+    const experience = xpThisTick + (wave.triggered > 0 ? crowdWaveXp : 0);
     if (experience > 0) {
       const offer = addExperience(run, experience, cardsRng);
       if (offer !== null) {

@@ -10,8 +10,9 @@
  * 约束：
  * - 单例全部在模块级创建一次，React 只拿 `bridge`；
  * - 每帧只走 loop → store.tick → renderer.draw，React 不在 rAF 中 setState；
- * - 音频引擎的 `clock` 与玩法时钟分离：玩法使用 `createFallbackClock`（段落按 run.time 推进），
- *   音频只负责发声；这是 M5 音频时钟语义未对齐前的装配层适配（见 t106 报告）。
+ * - 玩法时钟与音频时钟共用 `src/data/music-clock.ts` 的 `createRunMusicClock`（t108 统一）：
+ *   engine 只在 `now()` / `isRunning()` 上依赖 AudioContext，段落不再由两套逻辑各自推进；
+ *   静默段、失谐降级、音频总线仍由 engine 负责。
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -60,18 +61,7 @@ function renderFatal(root: HTMLElement, title: string, detail: string): void {
   root.replaceChildren(panel);
 }
 
-/** 页面级布局：canvas 在底层，React 在上层；`.app` 透明以露出 3D 舞台。 */
-function injectLayoutStyle(): void {
-  if (document.querySelector('style[data-gbl="layout"]') !== null) return;
-  const style = document.createElement('style');
-  style.dataset.gbl = 'layout';
-  style.textContent = [
-    '#game-canvas{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0;background:#0b0d12;outline:none;touch-action:none;}',
-    '#root{position:fixed;inset:0;z-index:1;}',
-    '.app{background:transparent;}',
-  ].join('\n');
-  document.head.append(style);
-}
+/** 页面级布局（canvas 层级 / `.app` 透明 / 指针规则）在 `styles/base.css` 的「3D 画布」段。 */
 
 /** 音频端口的装配层代理：玩法时钟用 fallback，发声交给真正的引擎。 */
 function createAudioHost(engine: AudioEngine | null, clock: MusicClock): AudioPort {
@@ -110,8 +100,6 @@ function buildSongView(data: DataRegistry): SongView {
  * 唯一启动入口：创建单例、挂载 React、启动循环；返回卸载函数。
  */
 export async function bootstrap(root: HTMLElement, canvas: HTMLCanvasElement): Promise<() => void> {
-  injectLayoutStyle();
-
   const boot = createBootContext(window.location.search);
   if (!boot.supported) {
     renderFatal(root, '无法开演', boot.webgl2.reason ?? '当前环境不支持 WebGL2。');
@@ -128,7 +116,7 @@ export async function bootstrap(root: HTMLElement, canvas: HTMLCanvasElement): P
   const loaded = savePort.load();
   const data = buildDataRegistry();
 
-  let renderer;
+  let renderer: ReturnType<typeof createRenderer>;
   try {
     renderer = createRenderer(canvas);
   } catch (error) {
@@ -185,13 +173,74 @@ export async function bootstrap(root: HTMLElement, canvas: HTMLCanvasElement): P
   const input = createInputSampler(buffer, 1);
   const detachInput = attachDomInput(buffer, { target: root, ignoreWhenTyping: true });
 
-  const resize = (): void => {
-    const width = Math.max(1, Math.floor(canvas.clientWidth || window.innerWidth));
-    const height = Math.max(1, Math.floor(canvas.clientHeight || window.innerHeight));
-    renderer.resize(width, height, Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
-  };
-  resize();
-  window.addEventListener('resize', resize);
+  // COMPAT-1：视口尺寸只认 documentElement/clientWidth（或 window.innerWidth），
+  // 不能读 canvas.clientWidth——renderer.setSize 写入的内联 px 会让读数自锁。
+  // 监听 resize / orientation / fullscreen / visualViewport / ResizeObserver / DPR 变化。
+  // 同步应用：拖拽窗口时事件本身已按帧到达；不依赖 rAF，避免后台/自动化窗口 rAF 被节流时
+  // 出现“CSS 已变、backing store 不跟”的假死。
+  let resizeObserver: ResizeObserver | null = null;
+  let dprQuery: MediaQueryList | null = null;
+  let lastViewport = { width: 0, height: 0, dpr: 0 };
+
+  function applyViewport(): void {
+    const width = Math.max(
+      1,
+      Math.floor(document.documentElement.clientWidth || window.innerWidth || 1),
+    );
+    const height = Math.max(
+      1,
+      Math.floor(document.documentElement.clientHeight || window.innerHeight || 1),
+    );
+    const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    lastViewport = { width, height, dpr };
+    renderer.resize(width, height, dpr);
+  }
+
+  function syncViewportIfNeeded(): void {
+    const width = Math.max(
+      1,
+      Math.floor(document.documentElement.clientWidth || window.innerWidth || 1),
+    );
+    const height = Math.max(
+      1,
+      Math.floor(document.documentElement.clientHeight || window.innerHeight || 1),
+    );
+    const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+    if (
+      width !== lastViewport.width ||
+      height !== lastViewport.height ||
+      dpr !== lastViewport.dpr
+    ) {
+      applyViewport();
+    }
+  }
+
+  function requestViewport(): void {
+    applyViewport();
+  }
+
+  function onDprChange(): void {
+    refreshDprQuery();
+    requestViewport();
+  }
+
+  function refreshDprQuery(): void {
+    if (typeof window.matchMedia !== 'function') return;
+    dprQuery?.removeEventListener('change', onDprChange);
+    dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    dprQuery.addEventListener('change', onDprChange);
+  }
+
+  applyViewport();
+  refreshDprQuery();
+  window.addEventListener('resize', requestViewport);
+  window.addEventListener('orientationchange', requestViewport);
+  document.addEventListener('fullscreenchange', requestViewport);
+  window.visualViewport?.addEventListener('resize', requestViewport);
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(requestViewport);
+    resizeObserver.observe(document.documentElement);
+  }
 
   const loop = createLoop({
     store,
@@ -200,11 +249,12 @@ export async function bootstrap(root: HTMLElement, canvas: HTMLCanvasElement): P
     audio,
     renderer,
     display: () => bridge.ui.getSnapshot().display,
+    // 兜底：某些宿主（后台窗口/自动化窗口）不派发 resize，或 DPR 变化无事件；
+    // 每帧比较一次视口，发现漂移就补一次 applyViewport。
+    onStats: () => syncViewportIfNeeded(),
   });
 
-  // HUD 节流到 10Hz：bridge.publishHud 内部还有 100ms 闸门。
-  const hudTimer = window.setInterval(() => bridge.publishHud(), 100);
-
+  // HUD 发布由 bridge 订阅 store.subscribeHud 完成（≤10Hz 闸门在 bridge 内部）。
   const syncAudioMix = (): void => {
     if (engine === null) return;
     applyAudioMix(engine, bridge.ui.getSnapshot().settings.settings);
@@ -236,9 +286,15 @@ export async function bootstrap(root: HTMLElement, canvas: HTMLCanvasElement): P
     if (disposed) return;
     disposed = true;
     loop.stop();
-    window.clearInterval(hudTimer);
     detachInput();
-    window.removeEventListener('resize', resize);
+    window.removeEventListener('resize', requestViewport);
+    window.removeEventListener('orientationchange', requestViewport);
+    document.removeEventListener('fullscreenchange', requestViewport);
+    window.visualViewport?.removeEventListener('resize', requestViewport);
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    dprQuery?.removeEventListener('change', onDprChange);
+    dprQuery = null;
     unsubscribeUi();
     document.removeEventListener('visibilitychange', onVisibilityChange);
     window.removeEventListener('pointerdown', startAudioOnce);

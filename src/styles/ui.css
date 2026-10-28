@@ -1078,6 +1078,13 @@
   margin-top: var(--gbl-space-4);
 }
 
+.results__note {
+  margin: -2px 0 var(--gbl-space-3);
+  color: var(--gbl-color-text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .results__stats {
   display: grid;
   gap: 6px var(--gbl-space-4);
@@ -1308,38 +1315,45 @@
   top: 0;
   right: 0;
   left: 0;
-  height: 17vh;
-  background: linear-gradient(180deg, rgb(255 255 255 / 96%), rgb(255 255 255 / 0%));
+  height: 11vh;
+  background: linear-gradient(180deg, rgb(255 255 255 / 78%), rgb(255 255 255 / 0%));
 }
 
 .whiteout__edge--bottom {
   right: 0;
   bottom: 0;
   left: 0;
-  height: 17vh;
-  background: linear-gradient(0deg, rgb(255 255 255 / 96%), rgb(255 255 255 / 0%));
+  height: 11vh;
+  background: linear-gradient(0deg, rgb(255 255 255 / 78%), rgb(255 255 255 / 0%));
 }
 
 .whiteout__edge--left {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 15vw;
-  background: linear-gradient(90deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 0%));
+  width: 10vw;
+  background: linear-gradient(90deg, rgb(255 255 255 / 72%), rgb(255 255 255 / 0%));
 }
 
 .whiteout__edge--right {
   top: 0;
   right: 0;
   bottom: 0;
-  width: 15vw;
-  background: linear-gradient(270deg, rgb(255 255 255 / 94%), rgb(255 255 255 / 0%));
+  width: 10vw;
+  background: linear-gradient(270deg, rgb(255 255 255 / 72%), rgb(255 255 255 / 0%));
 }
 
+/* H4：中央保持透明，只保留边缘 vignette；白色不再从四边吃进舞台中心。
+ * 中央 alpha 0，边缘随 inline whiteout opacity（≤0.85）线性放大。 */
 .whiteout__veil {
   position: absolute;
   inset: 0;
-  background: rgb(255 255 255 / 14%);
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 255 255 / 0%) 0%,
+    rgb(255 255 255 / 0%) 42%,
+    rgb(255 255 255 / 26%) 100%
+  );
 }
 
 .hud--critical .whiteout {
@@ -1385,7 +1399,7 @@
   align-items: center;
   gap: 3px;
   color: var(--gbl-color-border);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.06em;
 }
 
@@ -1427,14 +1441,15 @@
 
 .danger {
   display: grid;
+  box-sizing: border-box;
   align-items: center;
   gap: var(--gbl-space-2);
-  grid-template-columns: 28px 1fr 28px;
+  grid-template-columns: 32px 1fr 32px;
 }
 
 .danger__label {
   color: var(--gbl-color-text-dim);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-align: right;
 }
@@ -1491,12 +1506,13 @@
 .zone-dot {
   position: absolute;
   display: flex;
-  width: 58px;
+  width: 62px;
+  box-sizing: border-box;
   flex-direction: column;
   align-items: center;
   gap: 4px;
   color: var(--gbl-color-text-dim);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.08em;
 }
 
@@ -1529,7 +1545,8 @@
   width: 14px;
   height: 14px;
   background: currentcolor;
-  opacity: 0.28;
+  /* COMPAT-2：heat-0 也要在暗底衬上达到 ≥3:1；亮度差交给 glow/ring。 */
+  opacity: 0.8;
   transition: opacity 120ms linear;
 }
 
@@ -1550,16 +1567,16 @@
 }
 
 .zone-dot.is-heat-1 .zone-dot__shape {
-  opacity: 0.5;
+  opacity: 0.86;
 }
 
 .zone-dot.is-heat-2 .zone-dot__shape {
-  opacity: 0.72;
+  opacity: 0.92;
   box-shadow: 0 0 8px currentcolor;
 }
 
 .zone-dot.is-heat-3 .zone-dot__shape {
-  opacity: 0.95;
+  opacity: 0.97;
   box-shadow: 0 0 14px currentcolor;
 }
 
@@ -1601,8 +1618,43 @@
 }
 
 .zone-dot__name {
-  color: var(--gbl-color-text-dim);
+  color: var(--gbl-color-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
   white-space: nowrap;
+}
+
+/* COMPAT-2：白光 >0.2 时给四角/危险条加暗底衬 + 文字阴影。
+ * 白光遮罩在 HUD 内容之下（.whiteout z1 / .hud__content z2），所以标签本身不会被
+ * 白色渐变直接覆盖；问题只是浅色字落在白色背景上。暗底衬把局部背景拉回深色，
+ * 区名/危险标签达到 AA（≥4.5:1），区点图形达到非文本 3:1。
+ * 不把标签移出白光遮罩：四角语义仍贴着四边，白光依旧保留“从边缘吃掉颜色”的读数。 */
+.hud--whiteout .zone-dot {
+  width: 72px;
+  padding: 6px 8px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 8px;
+  background: rgb(5 6 8 / 88%);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 45%);
+}
+
+.hud--whiteout .zone-dot__name {
+  color: var(--gbl-color-text);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 95%);
+}
+
+.hud--whiteout .danger {
+  padding: 5px 8px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 999px;
+  background: rgb(5 6 8 / 88%);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 45%);
+}
+
+.hud--whiteout .danger__label {
+  color: var(--gbl-color-text);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 95%);
 }
 
 @keyframes heat-four {

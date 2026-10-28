@@ -104,6 +104,10 @@ const withoutExternal = combined
   .replace(/https:\/\/jcgt\.org\/published\/0007\/04\/01\//g, '');
 if (/https?:\/\//i.test(withoutExternal)) fail(7, '存在 http(s) 外部 URL');
 if (/\/\/cdn\./i.test(withoutExternal)) fail(7, '存在 CDN 引用');
+// 运行时外链：脚本正文里不得出现 src/href/new URL 指向 http(s)（只允许上面的文档注释豁免）。
+if (/\b(?:src|href)\s*=\s*["']https?:/i.test(scriptBody)) fail(7, '脚本运行时存在外链 src/href');
+if (/\bnew\s+URL\s*\(\s*["']https?:/i.test(scriptBody)) fail(7, '脚本运行时 new URL(http…)');
+if (/\.(?:src|href)\s*=\s*["']https?:/i.test(scriptBody)) fail(7, '脚本运行时赋值外链 URL');
 
 /* R8 无运行时联网 / 动态加载 */
 const runtimeBans = [

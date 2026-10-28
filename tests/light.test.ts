@@ -20,6 +20,9 @@ const FRONT_RIGHT = seatPositionAt(data.seats, 0, data.seats.cols - 1);
 function runOf(harness: ReturnType<typeof createHarness>): RunState {
   const run = harness.store.getRun();
   if (run === null) throw new Error('开局失败');
+  // 直接调用 updateLight 的单测以“较晚的 run.time”开始，跳过开场 pointer 激活窗口；
+  // 正式局由 store 从 0.016s 起跑，首次 pointermove 才激活。
+  run.time = Math.max(run.time, 10);
   return run;
 }
 

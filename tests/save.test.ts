@@ -239,8 +239,40 @@ describe('updateRecords', () => {
     expect(overloaded.bestTime).toBeLessThanOrEqual(86_400);
   });
 
-  it('应对非法日期回退为空日期', () => {
-    const next = updateRecords(EMPTY_RECORDS, makeResult(), 'not-a-date');
-    expect(next.lastRun.date).toBe('');
+  it('应对非法/空日期回退为本地日期（不再写空串）', () => {
+    const now = new Date();
+    const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    expect(updateRecords(EMPTY_RECORDS, makeResult(), 'not-a-date').lastRun.date).toBe(local);
+    expect(updateRecords(EMPTY_RECORDS, makeResult(), '').lastRun.date).toBe(local);
+    expect(updateRecords(EMPTY_RECORDS, makeResult(), '2026-10-28').lastRun.date).toBe('2026-10-28');
+  });
+
+  it('空场 + 完整两局后：emptyHouse 与 clears 各计一次（save 层唯一权威）', () => {
+    // 复现 t109 F-02：旧实现 bridge 会把空场也计入 clears；这里锁定 save 层口径。
+    const afterEmpty = updateRecords(
+      EMPTY_RECORDS,
+      makeResult({ ending: 'empty-house', grade: 'C' }),
+      '2026-10-28',
+    );
+    expect(afterEmpty.clears).toBe(0);
+    expect(afterEmpty.emptyHouse).toBe(1);
+
+    const afterComplete = updateRecords(afterEmpty, makeResult(), '2026-10-28');
+    expect(afterComplete.clears).toBe(1);
+    expect(afterComplete.emptyHouse).toBe(1);
+
+    // 再来一次空场：只涨 emptyHouse，clears 不变。
+    const afterSecondEmpty = updateRecords(
+      afterComplete,
+      makeResult({ ending: 'empty-house', grade: 'C' }),
+      '2026-10-28',
+    );
+    expect(afterSecondEmpty.clears).toBe(1);
+    expect(afterSecondEmpty.emptyHouse).toBe(2);
+
+    // 再来一次完整：只涨 clears，emptyHouse 不变。
+    const afterSecondComplete = updateRecords(afterSecondEmpty, makeResult(), '2026-10-28');
+    expect(afterSecondComplete.clears).toBe(2);
+    expect(afterSecondComplete.emptyHouse).toBe(2);
   });
 });

@@ -182,10 +182,25 @@ export function App({ bridge }: { readonly bridge: UiBridge }): ReactElement {
       data-low-flash={display.lowFlash ? 'true' : 'false'}
       data-beat-pulse={display.beatPulse ? 'true' : 'false'}
     >
-      <a className="skip-link" href="#ui-stage">
+      <a
+        className="skip-link"
+        href="#ui-stage"
+        onClick={(event) => {
+          // 跳过导航必须把焦点真正移到主区域；仅靠 hash + tabindex=-1 在部分浏览器
+          // 只移动滚动位置，键盘用户下一次 Tab 仍从文档开头开始。
+          event.preventDefault();
+          document.getElementById('ui-stage')?.focus();
+        }}
+      >
         跳到主要内容
       </a>
-      <main id="ui-stage" className="app__screen">
+      <main
+        id="ui-stage"
+        className="app__screen"
+        tabIndex={-1}
+        aria-hidden={overlay === 'none' ? undefined : true}
+        inert={overlay === 'none' ? undefined : true}
+      >
         {renderScreen(ui, bridge, overlay)}
       </main>
       <div className="app__overlays">{renderOverlay(ui, bridge)}</div>

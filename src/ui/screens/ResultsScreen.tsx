@@ -92,6 +92,9 @@ export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): 
             <h2 id="results-data-title" className="results__section-title">
               真实数据
             </h2>
+            <p className="results__note">
+              转化 / 被覆盖 / 离场为累计人次；空位按终场人数；第二排按四区各第二排（共 64 席）。
+            </p>
             <dl className="results__stats">
               <div>
                 <dt>峰值人气</dt>
@@ -102,7 +105,7 @@ export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): 
                 <dd>{view.stats.finalAudience}</dd>
               </div>
               <div>
-                <dt>转化人数</dt>
+                <dt>转化人次</dt>
                 <dd>{view.stats.converted}</dd>
               </div>
               <div>
@@ -118,7 +121,7 @@ export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): 
                 <dd>{view.stats.covered}</dd>
               </div>
               <div>
-                <dt>离场</dt>
+                <dt>离场人次</dt>
                 <dd>{view.stats.leftVenue}</dd>
               </div>
               <div>
@@ -126,7 +129,7 @@ export function ResultsScreen({ view, onRestart, onMenu }: ResultsScreenProps): 
                 <dd>{view.emptySeats}</dd>
               </div>
               <div>
-                <dt>第二排空位</dt>
+                <dt>第二排空位（四区）</dt>
                 <dd>{view.secondRowEmpty}</dd>
               </div>
               <div>

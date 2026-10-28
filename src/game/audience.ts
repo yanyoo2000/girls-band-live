@@ -817,15 +817,20 @@ export function countPresent(frame: AudienceFrame, zone: ZoneId | null): number 
 }
 
 /**
- * 白光（血量）比例：`0.85 × (1 − audience / capacity)`，clamp 0..0.85。
+ * 白光（血量）比例：以「本局峰值人气」为满血基准。
  *
- * 与 `HudSnapshot.whiteout` 同源（tech-spec §14.3）；不进后处理，只喂 DOM 遮罩与 uniform。
+ * `0.85 × (1 − audience / max(1, peak))`，clamp 0..0.85；`peak` 缺省为 `capacity`（兼容旧调用）。
+ * 开局 30/768 时 peak=30 → 白光 0（旧公式用容量做基准会得到 0.82，把前 90 秒洗白）。
+ *
+ * 与 `HudSnapshot.whiteout` / `RenderSnapshot.whiteout` 同源（tech-spec §14.3）；
+ * 不进后处理，只喂 DOM 遮罩与 uniform。
  */
-export function computeWhiteout(audience: number, capacity: number): Ratio {
-  if (capacity <= 0) {
+export function computeWhiteout(audience: number, capacity: number, peakAudience = capacity): Ratio {
+  const base = Math.max(1, peakAudience, audience);
+  if (capacity <= 0 || base <= 0) {
     return 0.85;
   }
-  const normalized = 1 - audience / capacity;
+  const normalized = 1 - Math.max(0, audience) / base;
   const value = 0.85 * (normalized > 1 ? 1 : normalized);
   if (value <= 0) {
     return 0;

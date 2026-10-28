@@ -97,7 +97,38 @@ a {
   inset: 0;
   isolation: isolate;
   overflow: hidden;
+  background: transparent;
+}
+
+/* --------------------------------------------------------------------------
+ * 3D 画布与 React 层级（t108 固化；不再由 main 注入）
+ *
+ * - canvas 铺满视口、在 React 之下；pointer-events: none 是刻意的：
+ *   指针事件由 #root 接收并冒泡给 input-dom，避免 UI 覆盖层时 canvas 收不到/抢事件。
+ * - #root 全屏置顶；`.app` 透明，让 WebGL 舞台从菜单/HUD 后面透出。
+ * ------------------------------------------------------------------------ */
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
   background: var(--gbl-color-ink);
+  outline: none;
+  pointer-events: none;
+  touch-action: none;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+/* 跳过导航的落点：程序化聚焦不要画整屏 outline，但键盘用户仍能看到 skip link 本身。 */
+.app__screen:focus {
+  outline: none;
 }
 
 .app::before {

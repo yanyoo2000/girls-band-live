@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { buildMembers, buildStage } from './models';
+import { seatPositionAt } from '../data/seats';
 import type { DataRegistry, PaletteDef, PaletteToken } from '../types/data';
 
 export interface SceneBundle {
@@ -92,6 +93,44 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
     members.add(member);
   }
   scene.add(members);
+
+  // H2：后排右端的荧光棒（GDD §14 的 1:12 钩子）。
+  // 固定 45°/22° 相机下，场馆第 24 排在默认画面之外；这里取“后区第一排的最右端”
+  // 作为等价可见钩子（仍属于后排、仍是最右），避免把邀请埋到镜头外。
+  const backRight = data.zones.find((zone) => zone.id === 'back-right');
+  const hookRow = backRight?.rowRange[0] ?? Math.max(0, data.seats.rows - 2);
+  const hookCol = backRight === undefined ? data.seats.cols - 1 : Math.max(backRight.colRange[0], backRight.colRange[1] - 2);
+  const hookSeat = seatPositionAt(data.seats, hookRow, hookCol);
+  const glowstickGeometry = new THREE.CylinderGeometry(0.07, 0.09, 1.7, 6);
+  const glowstickMaterial = new THREE.MeshStandardMaterial({
+    color: 0xb8ffd0,
+    emissive: 0x55ff9a,
+    emissiveIntensity: 1.4,
+    roughness: 0.35,
+    metalness: 0,
+  });
+  const glowstick = new THREE.Mesh(glowstickGeometry, glowstickMaterial);
+  glowstick.name = 'gbl-opening-glowstick';
+  glowstick.position.set(hookSeat.x, 1.7, hookSeat.z);
+  const glowstickTipGeometry = new THREE.SphereGeometry(0.34, 8, 6);
+  const glowstickTipMaterial = new THREE.MeshBasicMaterial({
+    color: 0xe8fff0,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+  });
+  const glowstickTip = new THREE.Mesh(glowstickTipGeometry, glowstickTipMaterial);
+  glowstickTip.position.y = 0.95;
+  glowstick.add(glowstickTip);
+  glowstick.onBeforeRender = () => {
+    const pulse = 0.9 + 0.45 * Math.sin(performance.now() / 420);
+    glowstickMaterial.emissiveIntensity = pulse;
+    glowstickTipMaterial.opacity = 0.6 + 0.3 * Math.sin(performance.now() / 420);
+  };
+  scene.add(glowstick);
 
   const ambient = new THREE.AmbientLight(0x2a3446, BASE_INTENSITY.ambient);
   ambient.name = 'gbl-ambient';
@@ -174,6 +213,11 @@ export function createScene(data: DataRegistry, palette: PaletteDef): SceneBundl
 
       scene.remove(stage);
       scene.remove(members);
+      scene.remove(glowstick);
+      glowstickGeometry.dispose();
+      glowstickMaterial.dispose();
+      glowstickTipGeometry.dispose();
+      glowstickTipMaterial.dispose();
       scene.remove(ambient);
       scene.remove(directional);
       scene.remove(directional.target);

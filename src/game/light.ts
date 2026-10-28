@@ -29,6 +29,7 @@ import type {
   ZoneId,
 } from '../types/game';
 import type { ChordKey, DataRegistry, SegmentDef } from '../types/data';
+import { OPENING_GRACE_SEC } from '../data/segments';
 import { zoneAtPoint } from './audience';
 import { nearestSeatColumn, nearestSeatRow, seatPositionAt } from '../data/seats';
 
@@ -47,6 +48,10 @@ interface LightRuntime {
   sweepMask: number;
   lastZone: ZoneId | null;
   lastBeatIndex: number;
+  /** 首次 pointermove 前不把“开始演出”按钮位置当成光位（H1）。 */
+  pointerSeeded: boolean;
+  pointerStartNdc: Vec2;
+  pointerActive: boolean;
 }
 
 const RUNTIMES = new WeakMap<RunState, LightRuntime>();
@@ -61,9 +66,17 @@ function runtimeOf(run: RunState): LightRuntime {
     sweepMask: 0,
     lastZone: null,
     lastBeatIndex: -1,
+    pointerSeeded: false,
+    pointerStartNdc: { x: 0, z: 0 },
+    pointerActive: false,
   };
   RUNTIMES.set(run, runtime);
   return runtime;
+}
+
+/** 玩家是否已经真正移动过指针（H1：按钮位置不算）。 */
+export function hasPlayerMovedLight(run: RunState): boolean {
+  return runtimeOf(run).pointerActive;
 }
 
 /** 推进光的位置/惯性/冷却/反驻守锚点（每固定步长调用一次）。 */
@@ -175,9 +188,24 @@ export function updateLight(run: RunState, input: InputFrame, data: DataRegistry
   const previousMode = light.mode;
   const previousZone = light.lightingZone;
 
+  // H1：开局先用 data 初始光位；第一次 pointermove 之前，按钮位置/初始指针一律不算。
+  // 用 NDC 判断“玩家是否动过鼠标”，避免键盘移动带动相机后 pointerWorld 漂移造成误激活。
+  if (!runtime.pointerSeeded) {
+    runtime.pointerSeeded = true;
+    runtime.pointerStartNdc = { x: input.pointerNdc.x, z: input.pointerNdc.z };
+    // 直接以较晚的 run.time 调用（单测/读档恢复）时不再等 pointermove；
+    // 正式局第一 tick 的 run.time 约 0.016，因此不会命中。
+    if (run.time > OPENING_GRACE_SEC) runtime.pointerActive = true;
+  } else if (distance(input.pointerNdc, runtime.pointerStartNdc) > 0.01) {
+    // 只认真实 NDC 变化；pointerWorld 会随相机缓动漂移，不能作为“玩家动过”的证据。
+    runtime.pointerActive = true;
+  }
+  const usePointer = runtime.pointerActive;
+  const pointer: Vec2 = usePointer ? input.pointerWorld : light.target;
+
   // 1) 形态判定（三种互斥；回照优先于束光，因为“把光收回脚下”是明确的意图）。
   const center = selfCenter(data);
-  const wantsSelf = distance(input.pointerWorld, center) <= SELF_LIGHT_RADIUS;
+  const wantsSelf = distance(pointer, center) <= SELF_LIGHT_RADIUS;
   const nextMode = wantsSelf ? 'self' : input.beamHeld ? 'beam' : 'spread';
   light.mode = nextMode;
   const form = data.lightForms[nextMode];
@@ -192,7 +220,9 @@ export function updateLight(run: RunState, input: InputFrame, data: DataRegistry
   const modeChanged = previousMode !== nextMode;
 
   // 2) 目标与惯性。
-  light.target = { x: input.pointerWorld.x, z: input.pointerWorld.z };
+  if (usePointer) {
+    light.target = { x: pointer.x, z: pointer.z };
+  }
   const inertia = balance.light.inertiaSec > 0 ? balance.light.inertiaSec : dt;
   const alpha = dt / inertia > 1 ? 1 : dt / inertia;
   const before = light.position;
@@ -206,13 +236,18 @@ export function updateLight(run: RunState, input: InputFrame, data: DataRegistry
     light.intensity = pulse > 0 ? Math.max(0, light.intensity - dt / pulse) : 0;
   }
 
-  // 4) 反驻守锚点：离开 6m 才重置；否则累计静止时长。
-  const anchorDistance = distance(light.position, light.anchor);
-  if (anchorDistance > balance.antiCamp.anchorRadius || modeChanged) {
+  // 4) 反驻守锚点：开场宽限 + 未动指针时不计时；离开 6m 才重置，否则累计静止时长。
+  if (run.time < OPENING_GRACE_SEC || !usePointer) {
     light.anchor = { x: light.position.x, z: light.position.z };
     light.anchorAge = 0;
   } else {
-    light.anchorAge += dt;
+    const anchorDistance = distance(light.position, light.anchor);
+    if (anchorDistance > balance.antiCamp.anchorRadius || modeChanged) {
+      light.anchor = { x: light.position.x, z: light.position.z };
+      light.anchorAge = 0;
+    } else {
+      light.anchorAge += dt;
+    }
   }
 
   // 5) 区读数与扫场窗口。

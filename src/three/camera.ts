@@ -39,15 +39,22 @@ const SHAKE_DECAY = 10;
 const SHAKE_MAX_PIXELS = 2;
 /** 跟随点高度：舞台台面 0.8m 略高，读座位表更稳。 */
 const TARGET_HEIGHT = 0.85;
+/**
+ * 构图前移（米）：相机目标略偏向观众席，让舞台与观众席占据画面中部，
+ * 避免 t118 的“主体压上半屏、底部 40% 近黑”。
+ */
+const FRAMING_AHEAD = 2;
 /** 反投影失败时的舞台中心（tech-spec §5.4「失败回退到舞台中心」）。 */
 const FALLBACK_STAGE_POINT: Vec2 = { x: 0, z: 0 };
 /** 相机可看范围（场馆内，避免看到墙外）。 */
 const BOUNDS = { minX: -8.5, maxX: 8.5, minZ: -3, maxZ: 21 } as const;
 /**
- * 机位限制：不让相机跑到后墙（z=-4.28）外面，否则后墙会挡住台面。
- * 跟到舞台附近时水平距离被压缩，俯角会变陡；这是本场馆的可接受取舍。
+ * 机位限制：x/y 不出场馆，z 只限制前侧上限。
+ * 旧实现把相机 z 钳到 -3.2，角色走到舞台后侧时相机被硬拉回台内、钻进鼓台，
+ * 整屏被几何/白光吞掉（t110 H3）。场馆后墙在 z=-4.28 但相机默认就在更后侧
+ * （z≈-10.9）透过开口看台面；因此后侧不需要这个钳制，保留完整跟随距离即可。
  */
-const CAMERA_LIMITS = { minX: -9.5, maxX: 9.5, minZ: -3.2, maxZ: 26, minHorizontal: 6 } as const;
+const CAMERA_LIMITS = { minX: -9.5, maxX: 9.5, minZ: -30, maxZ: 26, minHorizontal: 6 } as const;
 
 /** 当前激活的相机（main 在启动顺序第 5 步创建；renderer 每帧读取）。 */
 let activeRig: CameraRig | null = null;
@@ -73,6 +80,7 @@ export function createCameraRig(canvas: HTMLCanvasElement): CameraRig {
   let velocityZ = 0;
   let shakeEnergy = 0;
   let elapsed = 0;
+  let firstUpdate = true;
 
   applyProjection();
 
@@ -98,10 +106,15 @@ export function createCameraRig(canvas: HTMLCanvasElement): CameraRig {
       desired.set(
         clamp(wantedX + leadX, BOUNDS.minX, BOUNDS.maxX),
         TARGET_HEIGHT,
-        clamp(wantedZ + leadZ, BOUNDS.minZ, BOUNDS.maxZ),
+        clamp(wantedZ + leadZ + FRAMING_AHEAD, BOUNDS.minZ, BOUNDS.maxZ),
       );
 
       smoothed.lerp(desired, step > 0 ? 1 - Math.exp(-FOLLOW_RATE * step) : 0);
+      if (firstUpdate) {
+        // 开场直接 snap 到主唱，避免第一帧从 (0,8) 缓动到 (0,1.6) 造成光位/构图漂移。
+        smoothed.copy(desired);
+        firstUpdate = false;
+      }
 
       const zoom = clamp(frame.zoom > 0 ? frame.zoom : 1, 0.6, 1.8);
       const distance = clamp(BASE_DISTANCE / zoom, MIN_DISTANCE, MAX_DISTANCE);

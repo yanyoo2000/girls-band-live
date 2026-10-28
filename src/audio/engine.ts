@@ -21,6 +21,7 @@ import type {
   ZoneId
 } from '../types/game';
 import type { SettingsV1 } from '../types/save';
+import { createRunMusicClock } from '../data/music-clock';
 import { choirVoiceCount, createChoirPool, readChoirBusGain, setChoirChord } from './choir';
 import type { ChoirPool } from './choir';
 import { createFallbackReverb, renderImpulseResponse } from './ir';
@@ -204,64 +205,19 @@ function pick(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-/** 音乐时钟：AudioContext.currentTime 是唯一时间基准。 */
+/** 音乐时钟：玩法时间语义与 `platform/bootstrap` 的降级时钟共用 `createRunMusicClock`。 */
 function createClock(state: EngineState, data: DataRegistry): MusicClock {
-  const bpm = pick(data.beatGrid.bpm, pick(data.audio.bpm, 128));
-  const beatsPerBar = Math.max(1, pick(data.beatGrid.beatsPerBar, 4));
-  const barsPerPhrase = Math.max(1, pick(data.beatGrid.barsPerPhrase, 8));
-  const beatSec = 60 / Math.max(1, bpm);
-  const barSec = beatSec * beatsPerBar;
-
+  const runClock = createRunMusicClock(data);
   return {
-    bpm,
+    bpm: runClock.bpm,
     now(): Seconds {
       return state.ctx ? state.ctx.currentTime : 0;
     },
-    positionAt(time): {
-      bar: number;
-      beat: number;
-      beatPhase: number;
-      phraseBeat: number;
-      segment: SegmentId;
-      segmentProgress: number;
-      bpm: number;
-    } {
-      const elapsed = Math.max(0, time - state.startTime);
-      const bar = Math.floor(elapsed / barSec);
-      const inBar = elapsed - bar * barSec;
-      const beat = Math.floor(inBar / beatSec);
-      const beatPhase = Math.max(0, Math.min(1, inBar / beatSec - beat));
-      const phraseBeat = (bar % barsPerPhrase) * beatsPerBar + beat;
-      const segment = state.segment;
-      const def = data.segments.find((candidate) => candidate.id === segment);
-      const start = def ? def.startSec : 0;
-      const end = def ? def.endSec : barSec * 4;
-      const span = Math.max(0.001, end - start);
-      const segmentProgress = clamp01((elapsed - start) / span);
-      return { bar, beat, beatPhase, phraseBeat, segment, segmentProgress, bpm };
+    positionAt(time) {
+      return runClock.positionAt(time);
     },
-    tickAt(time): {
-      index: number;
-      time: Seconds;
-      bar: number;
-      beat: number;
-      phrase: number;
-      isBarStart: boolean;
-      strength: 'strong' | 'weak';
-    } {
-      const elapsed = Math.max(0, time - state.startTime);
-      const index = Math.floor(elapsed / beatSec);
-      const bar = Math.floor(index / beatsPerBar);
-      const beat = index % beatsPerBar;
-      return {
-        index,
-        time: state.startTime + index * beatSec,
-        bar,
-        beat,
-        phrase: Math.floor(bar / barsPerPhrase),
-        isBarStart: beat === 0,
-        strength: beat % 2 === 0 ? 'strong' : 'weak'
-      };
+    tickAt(time) {
+      return runClock.tickAt(time);
     },
     isRunning(): boolean {
       return state.ctx !== null && state.ctx.state === 'running' && state.started;

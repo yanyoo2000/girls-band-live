@@ -1244,7 +1244,9 @@ dispose()
 | 写入失败 | 静默，不重试、不提示 | — |
 
 - 只存设置/记录/解锁；**不存局内进度**，重开从 0:00 开始。
+- `lastRun.date` 使用**本地时区** `YYYY-MM-DD`（由 `save.ts` 的 `localDateStamp()` 生成；调用方传非法/空日期时回退本地当天）。
 - `records.bestRank` 比较顺序：`S > A > B > C > '-'`。
+- 记录的唯一权威是 `save.ts` 的 `updateRecords`（`store.finishRun` 调用一次）；UI bridge 只读回刷新，不写 `clears`/`lastRun`。
 
 ---
 
@@ -1381,7 +1383,7 @@ export default defineConfig({
 | 10 | `tests/progression.test.ts` | 24/10/3 互斥；offer 不含已移除卡；进化条件；`picks ≤ 10` |
 | 11 | `tests/boss.test.ts` | 6:30/6:45/7:15/7:40 相位；静默 8 小节；退场带走区阈值 |
 | 12 | `tests/save.test.ts` | 损坏回退；缺字段补默认；clamp；`.bad` 备份；写失败静默 |
-| 13 | `tests/hud.test.ts` | 白光公式 `0.85×(1−a/768)`；四区 waiting；0 数字（字段无 number 展示项） |
+| 13 | `tests/hud.test.ts` | 峰值基准白光 `0.85×(1−a/max(1,peak))`（开局 30/768=0、掉半=0.425）；四区 waiting；0 数字（字段无 number 展示项） |
 | 14 | `tests/determinism.test.ts` | 同 seed 两局 `RunResult` 全等；扫描 `src/game/**` 无 `Math.random`/`Date.now` |
 | 15 | `tests/entities.test.ts` | 池化复用、id 稳定、dying 回收、容量上限不越界 |
 | 16 | `tests/waves.test.ts` | 段落生成率、裂缝 +15%、同屏上限截断、背后生成概率 30% |
@@ -1410,7 +1412,7 @@ export default defineConfig({
 | `dwellP50` / `dwellP90` | 驻留段（连续停留在 1.5m 半径内）时长分布，仅统计 ≥0.6s 的段 | P50 ≤6s；P90 ≤14s |
 | `zoneConversionRate[zone]` | 该区被照亮 ≥0.4s 的人数中最终转彩的比例 | 最低区 ≥最高区 ×0.6（防“只养一区”） |
 | `igniteOnBeatRate` | (perfect + good) / 全部点燃；无点燃的样本不计入 | ≥0.55 |
-| `dwellRewardRatio` | 驻留期人气净变化/秒 ÷ 移动期人气净变化/秒 | <0.75（驻守不是最优） |
+| `dwellRewardRatio` | 驻留期人气净变化/秒 ÷ 移动期人气净变化/秒 | <0.75（驻守不是最优）；**负值 = 停住期人气净下降（停住净损失）**，属预期证据，不是阈值失败 |
 | 返听出现 | 驻光 4.2s 内必须出现 | 是/否 |
 | 驻守 bot | 见 §14.1 | 45s 掉 ≥40% |
 
@@ -1486,7 +1488,7 @@ export interface LightUpdate {
   - 驻守 bot：光心固定 + ±0.3m 微摆 → 断言 45s 人气相对开局下降 ≥40%，且返听在 4.2s 内出现；
   - 扫场 bot：每 3s 换区 → 断言 45s 人气净增 ≥20%；
   - 3 分钟对比：驻守人气低于扫场 ≥25%；
-  - `dwellRewardRatio < 0.75`。
+  - `dwellRewardRatio < 0.75`（负值 = 驻留期人气净下降，即停住净损失；不是阈值失败）。
 - 通过线同时被 `AC-F03`、`AC-H02` 引用；**不通过不是调数值，而是改规则**（GDD §11.2）。
 
 ### 14.2 F5 光跟拍 → `evaluateIgnite` + 关声可玩
@@ -1508,12 +1510,14 @@ export function evaluateIgnite(
 ### 14.3 F8 血条视觉 → `computeWhiteout` + DOM 遮罩
 
 ```ts
-// src/game/audience.ts（dev-engine，纯函数；与 HudSnapshot 同源）
-export function computeWhiteout(audience: number, capacity: number): Ratio; // 0.85 * (1 - a/cap)，clamp 0..0.85
+// src/game/audience.ts（dev-engine，纯函数；与 HudSnapshot / RenderSnapshot 同源）
+export function computeWhiteout(audience: number, capacity: number, peakAudience?: number): Ratio;
+// 0.85 × (1 − audience / max(1, peak, audience))，peak 缺省为 capacity，clamp 0..0.85
 ```
 
-- 数据流：`HudSnapshot.whiteout` → React `#whiteout` 的 CSS 径向渐变 alpha；同时 `renderer` 用同一 uniform 对观众材质去饱和。
-- 断言（`tests/hud.test.ts`）：`computeWhiteout(768,768)=0`、`(0,768)=0.85`、`(384,768)≈0.425`；单调递减；永不 >0.85。
+- **峰值基准（t108 起唯一口径）**：`peak` 取本局峰值人气（store 传 `max(stats.peakAudience, present)`）。开局 30/768、peak=30 → **0**；满场/峰值 → **0**；掉到峰值一半 → **0.425**。旧固定公式 `0.85×(1−a/768)` 作废（会把前 90 秒洗白）。
+- 数据流：`HudSnapshot.whiteout` → React `#whiteout` 的 CSS 径向渐变 alpha；`RenderSnapshot.whiteout` → renderer 的观众材质 uniform；两处必须同值，不允许各自推导。
+- 断言（`tests/hud.test.ts`）：`computeWhiteout(768,768)=0`、`(0,768)=0.85`、`(384,768)≈0.425`；`computeWhiteout(30,768,30)=0`、`(15,768,30)≈0.425`、`(0,768,30)=0.85`；单调递减；永不 >0.85。
 - 不进后处理：`renderer.stats().programs` 中不得出现 EffectComposer 相关；`validate` R10 检查无 `EffectComposer` 字符串。
 - 人测：5 人 3 秒读血量（`AC-11`）。
 

@@ -150,6 +150,11 @@ describe('UI smoke', () => {
     expect(playing).toContain('build-strip');
     expect(playing).toContain('finale');
     expect(playing).toContain('长按 Space 放下光');
+    // COMPAT-2：whiteout=0.4 时 HUD 进入高对比模式（暗底衬）。
+    expect(playing).toContain('hud--whiteout');
+    // 跳过导航落点：main 可程序化聚焦，且无覆盖层时不应 inert。
+    expect(playing).toMatch(/id="ui-stage"[^>]*tabindex="-1"/);
+    expect(playing).not.toContain('inert=""');
   });
 
   it('renders level up, failure and results from events', () => {
@@ -162,6 +167,9 @@ describe('UI smoke', () => {
     const levelup = renderToStaticMarkup(createElement(App, { bridge }));
     expect(levelup).toContain('选一张');
     expect((levelup.match(/card-pedal/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    // 升级对话框打开时，背景主区域 inert + aria-hidden，焦点不应落到 HUD。
+    expect(levelup).toContain('inert=""');
+    expect(levelup).toContain('aria-hidden="true"');
 
     const stats: RunStats = {
       peakAudience: 480,
@@ -210,6 +218,10 @@ describe('UI smoke', () => {
     expect(failure).toContain('第 3 区');
     expect(failure).toContain('最后 5 秒');
 
+    // M2：断线事件应进入结算后台文案，而不是恒 0。
+    eventHandler?.({ kind: 'line', time: 380, beatIndex: 90, action: 'break', line: 'guitar' });
+    eventHandler?.({ kind: 'line', time: 381, beatIndex: 90, action: 'break', line: 'bass' });
+
     eventHandler?.({ kind: 'run-end', time: 402, beatIndex: 99, result });
     const stillFailure = renderToStaticMarkup(createElement(App, { bridge }));
     expect(stillFailure).toContain('这一场，停在这里');
@@ -221,6 +233,8 @@ describe('UI smoke', () => {
     expect(results).toContain('峰值人气');
     expect(results).toContain('中断 · 没有评级');
     expect(results).toContain('再演一场');
+    expect(results).toContain('吉他断了 1 次');
+    expect(results).toContain('贝斯断了 1 次');
   });
 
   it('persists settings and rebuilds hud only when snapshot changes', async () => {

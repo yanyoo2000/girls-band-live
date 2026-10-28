@@ -2,15 +2,16 @@
  * 启动参数与降级时钟（tech-spec §5.7 / §6.4；集成层，tech-director 所有）。
  *
  * - `createBootContext(search)` 解析 `?dev / ?seed / ?quality / ?scene / ?run` 并探测 WebGL2；
- * - `createFallbackClock(data)` 是音频未就绪时的唯一时间基准：按 BPM/拍点/段落从
- *   `run.time` 推导音乐位置（不依赖 AudioContext，也不读帧时钟）。
+ * - `createFallbackClock(data)` 是音频未就绪时的时钟；**玩法时间语义与 engine 时钟同源**，
+ *   两者都复用 `src/data/music-clock.ts` 的 `createRunMusicClock`，段落不再由两套逻辑各自推进。
  *
  * 注意：本文件不得 import react/three；只做纯计算与探测。
  */
-import type { BeatTick, MusicalPosition, MusicClock, Seconds } from '../types/game';
+import type { MusicClock, Seconds } from '../types/game';
 import type { DataRegistry } from '../types/data';
 import type { QualityLevel } from '../types/save';
 import type { DevFlags } from '../types/ui';
+import { createRunMusicClock } from '../data/music-clock';
 import { detectWebGL2, type WebGL2Support } from './webgl-support';
 
 /** 启动上下文（tech-spec §5.7 的 BootContext，追加可选的 dev 参数）。 */
@@ -52,85 +53,25 @@ export function createBootContext(search: string): BootContext {
   };
 }
 
-function clamp01(value: number): number {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
-
 /**
- * 降级音乐时钟：`positionAt(time)` 以开局 0 秒为基准推导小节/拍/段落。
+ * 降级音乐时钟：音频未就绪（无 AudioContext / 尚未解锁）时仍能驱动 store。
  *
- * 与 `src/audio/engine.ts` 的时钟区别：不依赖 AudioContext，段落按 `time` 落在
- * `data.segments` 的区间上取，因此可以独立驱动 store 的段落推进。
+ * `positionAt(time)` 的 `time` 是**本局已演唱秒数**（run.time），段落按 `data.segments`
+ * 推导；与 `audio/engine` 的时钟共用 `createRunMusicClock`，因此两者切换不会卡段落。
  */
 export function createFallbackClock(data: DataRegistry): MusicClock {
-  const bpm = data.beatGrid.bpm > 0 ? data.beatGrid.bpm : 128;
-  const beatsPerBar = Math.max(1, Math.floor(data.beatGrid.beatsPerBar));
-  const barsPerPhrase = Math.max(1, Math.floor(data.beatGrid.barsPerPhrase));
-  const beatSec = 60 / bpm;
-  const barSec = beatSec * beatsPerBar;
+  const runClock = createRunMusicClock(data);
   const originMs = typeof performance !== 'undefined' ? performance.now() : 0;
-  const segments = data.segments;
-
-  const segmentAt = (time: Seconds): { id: (typeof segments)[number]['id']; startSec: Seconds; endSec: Seconds } => {
-    for (const segment of segments) {
-      if (time >= segment.startSec && time < segment.endSec) {
-        return { id: segment.id, startSec: segment.startSec, endSec: segment.endSec };
-      }
-    }
-    const first = segments[0];
-    const last = segments[segments.length - 1];
-    if (time < (first?.startSec ?? 0)) {
-      return {
-        id: first?.id ?? 'overture',
-        startSec: first?.startSec ?? 0,
-        endSec: first?.endSec ?? barSec * 4,
-      };
-    }
-    return {
-      id: last?.id ?? 'finale',
-      startSec: last?.startSec ?? 0,
-      endSec: last?.endSec ?? barSec * 4,
-    };
-  };
-
   return {
-    bpm,
+    bpm: runClock.bpm,
     now(): Seconds {
       return typeof performance !== 'undefined' ? (performance.now() - originMs) / 1000 : 0;
     },
-    positionAt(time: Seconds): MusicalPosition {
-      const elapsed = Math.max(0, time);
-      const bar = Math.floor(elapsed / barSec);
-      const inBar = elapsed - bar * barSec;
-      const beat = Math.floor(inBar / beatSec);
-      const beatPhase = clamp01(inBar / beatSec - beat);
-      const phraseBeat = (bar % barsPerPhrase) * beatsPerBar + beat;
-      const segment = segmentAt(elapsed);
-      const span = Math.max(0.001, segment.endSec - segment.startSec);
-      return {
-        bar,
-        beat,
-        beatPhase,
-        phraseBeat,
-        segment: segment.id,
-        segmentProgress: clamp01((elapsed - segment.startSec) / span),
-        bpm,
-      };
+    positionAt(time) {
+      return runClock.positionAt(time);
     },
-    tickAt(time: Seconds): BeatTick {
-      const elapsed = Math.max(0, time);
-      const index = Math.floor(elapsed / beatSec);
-      const bar = Math.floor(index / beatsPerBar);
-      const beat = index % beatsPerBar;
-      return {
-        index,
-        time: index * beatSec,
-        bar,
-        beat,
-        phrase: Math.floor(bar / barsPerPhrase),
-        isBarStart: beat === 0,
-        strength: beat % 2 === 0 ? 'strong' : 'weak',
-      };
+    tickAt(time) {
+      return runClock.tickAt(time);
     },
     isRunning(): boolean {
       return true;

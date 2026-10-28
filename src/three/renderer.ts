@@ -23,37 +23,15 @@ import {
 } from './instancing';
 import { getActiveFxSystem } from './fx';
 import { getActiveSceneBundle } from './scene';
-import type { AudienceFrame, LightFrame, RenderSnapshot, Vec2 } from '../types/game';
+import type { LightFrame, RenderSnapshot, Vec2 } from '../types/game';
 import type { DisplaySettings, QualityLevel } from '../types/save';
 import type { CameraRig } from './camera';
 import type { AudienceInstances, NoiseInstances, ParticleInstances } from './instancing';
 import type { FxSystem } from './fx';
 import type { SceneBundle } from './scene';
+import type { FrameRenderer, RendererInfo, RenderStats } from '../types/game';
 
-export interface RendererInfo {
-  readonly webglVersion: 2;
-  readonly maxTextureSize: number;
-  readonly gpu: string;
-}
-
-export interface RenderStats {
-  readonly drawCalls: number;
-  readonly triangles: number;
-  readonly programs: number;
-  readonly textures: number;
-  readonly geometries: number;
-  /** 半透明层叠的解析估算（§9.3），≤2.5。 */
-  readonly overdrawEstimate: number;
-  readonly dpr: number;
-}
-
-export interface FrameRenderer {
-  readonly info: RendererInfo;
-  resize(width: number, height: number, dpr: number): void;
-  draw(snapshot: RenderSnapshot, settings: DisplaySettings): void;
-  stats(): RenderStats;
-  dispose(): void;
-}
+export type { FrameRenderer, RendererInfo, RenderStats } from '../types/game';
 
 /* ==========================================================================
  * 常量
@@ -257,7 +235,11 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
   function applySize(): void {
     const dpr = effectivePixelRatio();
     renderer.setPixelRatio(dpr);
-    renderer.setSize(viewportWidth, viewportHeight, true);
+    // CSS 尺寸交给样式表（#game-canvas 100%），这里只改 backing store；
+    // 否则内联 px 会在窗口缩放后与 CSS 冲突，并让宿主读 clientWidth 时自锁。
+    canvas.style.removeProperty('width');
+    canvas.style.removeProperty('height');
+    renderer.setSize(viewportWidth, viewportHeight, false);
     fallbackCamera.aspect = viewportWidth / viewportHeight;
     fallbackCamera.updateProjectionMatrix();
     bound.camera?.resize(viewportWidth, viewportHeight);
@@ -368,8 +350,7 @@ export function createRenderer(canvas: HTMLCanvasElement): FrameRenderer {
 
   function applyAudienceLighting(snapshot: RenderSnapshot): void {
     if (bound.audience === null) return;
-    const whiteout = deriveWhiteout(snapshot.audience);
-    applyWhiteoutUniform(bound.audience.mesh, whiteout);
+    applyWhiteoutUniform(bound.audience.mesh, snapshot.whiteout);
 
     const dim = 0.35 + 0.65 * clamp(snapshot.venueLight, 0, 1);
     const material = bound.audience.mesh.material;
@@ -597,23 +578,9 @@ function createPoolGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * 白光遮罩：与 `game/audience.ts computeWhiteout` 同一公式（0.85 × 空缺比例，clamp 0..0.85）。
- * `RenderSnapshot` 未携带 `whiteout` 字段（tech-spec §14.3 的已知缺口），故由观众帧推导；
- * game 侧一旦把字段加进快照，这里应改为直接读快照值。
+ * 白光遮罩：直接读 `RenderSnapshot.whiteout`（game 层按峰值基准计算，§14.3）。
+ * 渲染层不再自行推导，避免与 HUD 使用两套血量口径。
  */
-function deriveWhiteout(frame: AudienceFrame): number {
-  const size = Math.floor(frame.size);
-  if (size <= 0) return 0;
-  const limit = Math.min(size, frame.state.length);
-  let present = 0;
-  for (let index = 0; index < limit; index += 1) {
-    const code = frame.state[index];
-    if (code === 1 || code === 2 || code === 3) present += 1;
-  }
-  return clamp(0.85 * (1 - present / size), 0, 0.85);
-}
-
-/** 把 whiteout 写进观众材质的 uniform（句柄由 instancing.createAudienceMaterial 挂在 userData）。 */
 function applyWhiteoutUniform(mesh: THREE.InstancedMesh, value: number): void {
   const material = mesh.material;
   const single = Array.isArray(material) ? material[0] : material;

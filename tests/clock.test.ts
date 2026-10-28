@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAudioEngine } from '../src/audio/engine';
 import type { AudioEngine } from '../src/audio/engine';
+import { createFallbackClock } from '../src/platform/bootstrap';
 import { buildDataRegistry } from '../src/data';
 import { BEAT_GRID, SECONDS_PER_BAR, SECONDS_PER_BEAT } from '../src/data/segments';
 
@@ -99,6 +100,27 @@ describe('positionAt', () => {
     const later = clock().positionAt(SECONDS_PER_BAR * 100);
     expect(later.segmentProgress).toBeGreaterThanOrEqual(0);
     expect(later.segmentProgress).toBeLessThanOrEqual(1);
+  });
+
+  it('应按 time 推进段落（不依赖音频 state.segment；t108 修复）', () => {
+    expect(clock().positionAt(10).segment).toBe('overture');
+    expect(clock().positionAt(100).segment).toBe('verse');
+    expect(clock().positionAt(300).segment).toBe('chorus');
+    expect(clock().positionAt(400).segment).toBe('bridge');
+    expect(clock().positionAt(500).segment).toBe('finale');
+    // 超过全曲末尾仍停在最后一段，不抛异常。
+    expect(clock().positionAt(600).segment).toBe('finale');
+  });
+
+  it('应与 platform 降级时钟共用同一套段落推导（engine/fallback 不各推一套）', () => {
+    const fallback = createFallbackClock(data);
+    for (const time of [0, 45, 100, 220, 300, 400, 500, 600]) {
+      const enginePosition = clock().positionAt(time);
+      const fallbackPosition = fallback.positionAt(time);
+      expect(fallbackPosition.segment).toBe(enginePosition.segment);
+      expect(fallbackPosition.bar).toBe(enginePosition.bar);
+      expect(fallbackPosition.beat).toBe(enginePosition.beat);
+    }
   });
 });
 

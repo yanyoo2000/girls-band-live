@@ -228,6 +228,15 @@ function isValidDate(value: string): boolean {
   return month >= 1 && month <= 12 && day >= 1 && day <= 31;
 }
 
+/** 本地时区的 YYYY-MM-DD（存档 lastRun.date 的权威默认值）。 */
+function localDateStamp(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function readUnlockList(
   value: unknown,
   allowed: ReadonlySet<string>,
@@ -506,6 +515,8 @@ export function updateRecords(records: RecordsV1, result: RunResult, date: strin
   const stats = result.stats;
   const grade = result.grade;
   const duration = Number.isFinite(stats.duration) ? stats.duration : 0;
+  // 调用方传空/非法日期时用本地日期，避免写入 DEFAULT_LAST_RUN.date 的空串。
+  const dateStamp = isValidDate(date) ? date : localDateStamp();
 
   return {
     bestAudience: Math.max(
@@ -520,7 +531,7 @@ export function updateRecords(records: RecordsV1, result: RunResult, date: strin
     emptyHouse: clampCount(records.emptyHouse, MAX_COUNT) + (result.ending === 'empty-house' ? 1 : 0),
     bestRank: grade === null ? records.bestRank : higherRank(records.bestRank, grade),
     lastRun: {
-      date: isValidDate(date) ? date : DEFAULT_LAST_RUN.date,
+      date: dateStamp,
       audience: clampCount(stats.finalAudience, SEAT_CAPACITY),
       converted: clampCount(stats.converted, MAX_COUNT),
       burned: clampCount(stats.burned, MAX_COUNT),

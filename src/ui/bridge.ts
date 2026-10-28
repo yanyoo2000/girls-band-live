@@ -24,7 +24,7 @@ import type {
   Vec2,
   ZoneId,
 } from '../types/game';
-import type { RecordsV1, SaveDataV1, SavePort, SettingsV1 } from '../types/save';
+import type { SaveDataV1, SavePort, SettingsV1 } from '../types/save';
 import type {
   CreditsView,
   FailureView,
@@ -52,8 +52,6 @@ import {
   CREDITS_ROLES,
   GAME_TITLE,
   REHEARSAL_PAGES,
-  SEGMENT_ORDER,
-  ZERO_LINE_BREAKS,
   bindCopyLines,
   createCopyRenderer,
   describeLastFiveSeconds,
@@ -186,11 +184,6 @@ function rankScore(rank: string): number {
   }
 }
 
-/** 今日日期（存档 lastRun.date）。 */
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 /** 焦点是否在表单控件内。 */
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
@@ -218,7 +211,13 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
   let failureTimer: ReturnType<typeof setTimeout> | null = null;
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let recordsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let recordsReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 本局断线次数（M2：结算按真实事件计数，不再恒 0）。 */
+  let lineBreakCounts: { guitar: number; bass: number; drums: number } = {
+    guitar: 0,
+    bass: 0,
+    drums: 0,
+  };
   const uiListeners = new Set<() => void>();
   const hudListeners = new Set<() => void>();
   const runListeners = new Set<() => void>();
@@ -403,7 +402,7 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       breakout: result.zoneCounts,
       emptySeats: result.emptySeats,
       secondRowEmpty: result.secondRowEmpty,
-      lineBreaks: ZERO_LINE_BREAKS,
+      lineBreaks: { ...lineBreakCounts },
       returnLocks: result.stats.returnLocks,
     };
     return {
@@ -601,6 +600,7 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
 
   const startRun = (seed: number | null, restart: boolean): void => {
     const resolved = resolveSeed(seed);
+    lineBreakCounts = { guitar: 0, bass: 0, drums: 0 };
     clearFailureTimer();
     overlayReturn = null;
     pendingResults = false;
@@ -928,38 +928,20 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     const previous = saveData.records;
     const newBestAudience = result.stats.peakAudience > previous.bestAudience;
     const newBestRank = result.grade !== null && rankScore(result.grade) > rankScore(previous.bestRank);
-    const run = readRun();
-    const segmentCount = run === null ? 5 : Math.max(1, SEGMENT_ORDER.indexOf(run.segment) + 1);
-    const nextRecords: RecordsV1 = {
-      ...previous,
-      bestAudience: Math.max(previous.bestAudience, result.stats.peakAudience),
-      bestTime: Math.max(previous.bestTime, Math.round(result.stats.duration)),
-      clears: previous.clears + (result.ending === 'interrupted' ? 0 : 1),
-      emptyHouse: previous.emptyHouse + (result.ending === 'empty-house' ? 1 : 0),
-      bestRank: newBestRank ? (result.grade ?? previous.bestRank) : previous.bestRank,
-      lastRun: {
-        date: today(),
-        audience: result.stats.finalAudience,
-        converted: result.stats.converted,
-        burned: result.stats.burned,
-        rank: result.grade ?? '-',
-        segments: segmentCount,
-      },
-    };
-    saveData = { ...saveData, records: nextRecords };
-    try {
-      deps.save.save(saveData, 'run-end');
-    } catch {
-      // 存档写入失败静默降级，不影响结算。
+    // 记录的唯一权威是 game/save.ts 的 updateRecords（store.finishRun 调用）。
+    // bridge 不再写 clears / lastRun / 存档，只在本局结束后重新读取，刷新菜单与曲目单。
+    // store 在 run-end 事件返回后同步写盘，所以延迟到下一次事件循环再读。
+    if (recordsReloadTimer !== null) {
+      clearTimeout(recordsReloadTimer);
     }
-    // Store 的 finishRun 也可能写一次 records；延迟一帧再写，保证 UI 计算出的
-    // lastRun.date / segments 与「空场也计完成」的口径不会被先写覆盖。
-    if (recordsSaveTimer !== null) {
-      clearTimeout(recordsSaveTimer);
-    }
-    recordsSaveTimer = setTimeout(() => {
-      recordsSaveTimer = null;
-      deps.save.save(saveData, 'run-end');
+    recordsReloadTimer = setTimeout(() => {
+      recordsReloadTimer = null;
+      try {
+        saveData = deps.save.load().data;
+      } catch {
+        return;
+      }
+      commit({ menu: buildMenu(), setlist: buildSetlist() });
     }, 0);
 
     const resultView = buildResult(result, newBestAudience, newBestRank);
@@ -1013,6 +995,7 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
         return;
       case 'line':
         if (event.action === 'break') {
+          lineBreakCounts[event.line] += 1;
           pushToast('线断了。靠近队友，按 E 插线。', 'warn');
         }
         return;
@@ -1106,6 +1089,10 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
     refreshRun(true);
   };
 
+  // store 每拍/每次强制发布 HUD 时通知桥；桥内部仍按 100ms 闸门节流到 ≤10Hz。
+  // 这样 loop 不需要知道 bridge（避免 game → ui 依赖），也不会每帧 setState。
+  const unsubscribeStoreHud = deps.store.subscribeHud(() => publishHud());
+
   const dispatch = (command: UiCommand): void => {
     switch (command.type) {
       case 'start-run':
@@ -1195,6 +1182,7 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
 
   const dispose = (): void => {
     unsubscribeEvents();
+    unsubscribeStoreHud();
     clearFailureTimer();
     if (toastTimer !== null) {
       clearTimeout(toastTimer);
@@ -1204,9 +1192,9 @@ export function createUiBridge(deps: BridgeDeps): UiBridgeRuntime {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    if (recordsSaveTimer !== null) {
-      clearTimeout(recordsSaveTimer);
-      recordsSaveTimer = null;
+    if (recordsReloadTimer !== null) {
+      clearTimeout(recordsReloadTimer);
+      recordsReloadTimer = null;
     }
     document.removeEventListener('keydown', onGlobalKeyDown);
     document.removeEventListener('pointerdown', onFirstGesture, true);
